@@ -1,4 +1,5 @@
 const sharp = require('sharp');
+const opentype = require('opentype.js');
 
 // Image to Text icon: a photo corner turning into a line of text, in the
 // app's palette (paper, ink, one highlighter). Three options are drawn for
@@ -8,9 +9,26 @@ const sharp = require('sharp');
 //             lines of text, the middle one under the highlighter
 //   frame   - camera framing corners on ink, a highlighted line inside
 //   dogear  - a page with a folded corner on highlighter: picture on top, lines below
-// Chosen: frame (Brian, Oct 22, after the 60 px comparison: the strips'
-// text lines disappear at home screen size). See docs/design/NOTES.md.
-const CHOSEN = 'frame';
+//   viewfinder - handwritten "Aa" inside camera viewfinder corners, and the
+//             same "Aa" typed on a highlighter bar below: image in, text out
+// Chosen: viewfinder (Brian's concept, Oct 22; strips and frame were
+// rejected because neither says "image to text"). See docs/design/NOTES.md.
+const CHOSEN = 'viewfinder';
+
+// Text is drawn as outlines from font files, so the icon looks the same on
+// any machine: Caveat SemiBold (OFL, ../assets/fonts, from google/fonts
+// ofl/caveat) for the handwriting, Inter Black (OFL, ./fonts, from
+// google/fonts ofl/inter, used only here) for the typed letters.
+const HAND = opentype.loadSync(__dirname + '/../assets/fonts/Caveat_600SemiBold.ttf');
+const SANS = opentype.loadSync(__dirname + '/fonts/Inter_900Black.ttf');
+
+/** `text` as an SVG path centered on (cx, cy), and its width. */
+function textPath(font, text, size, cx, cy) {
+  const b = font.getPath(text, 0, 0, size).getBoundingBox();
+  const dx = cx - (b.x1 + b.x2) / 2;
+  const dy = cy - (b.y1 + b.y2) / 2;
+  return { d: font.getPath(text, dx, dy, size).toPathData(2), width: b.x2 - b.x1 };
+}
 
 const PAPER = '#F4EFE4';
 const SHEET = '#FBF8F1';
@@ -59,6 +77,26 @@ const art = {
     <rect x="292" y="650" width="400" height="38" rx="19" fill="${INK}"/>
     <rect x="292" y="740" width="260" height="38" rx="19" fill="${INK}"/>
   </svg>`,
+  viewfinder: () => {
+    // Viewfinder corners: x 120 to 904, y 110 to 520, arms 110 long, 34 wide.
+    const [l, r, t, b, a, k] = [120, 904, 110, 520, 110, 26];
+    const corners = [
+      `M${l} ${t + a} V${t + k} Q${l} ${t} ${l + k} ${t} H${l + a}`,
+      `M${r - a} ${t} H${r - k} Q${r} ${t} ${r} ${t + k} V${t + a}`,
+      `M${r} ${b - a} V${b - k} Q${r} ${b} ${r - k} ${b} H${r - a}`,
+      `M${l + a} ${b} H${l + k} Q${l} ${b} ${l} ${b - k} V${b - a}`,
+    ].join(' ');
+    const hand = textPath(HAND, 'Aa', 420, 512, (t + b) / 2);
+    const typed = textPath(SANS, 'Aa', 300, 512, 755);
+    const barW = typed.width + 150;
+    return `<svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1024" height="1024" fill="${INK}"/>
+    <path d="${corners}" stroke="${SHEET}" stroke-width="34" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="rotate(-4 512 ${(t + b) / 2})"><path d="${hand.d}" fill="${SHEET}"/></g>
+    <rect x="${512 - barW / 2}" y="640" width="${barW}" height="230" rx="36" fill="${HIGHLIGHT}"/>
+    <path d="${typed.d}" fill="${SHEET}"/>
+  </svg>`;
+  },
 };
 
 async function writeChosen() {
@@ -66,7 +104,7 @@ async function writeChosen() {
   // App Store icon: no transparency.
   await sharp(full).flatten({ background: PAPER }).resize(1024, 1024).png().toFile('../assets/icon.png');
   await sharp(full).resize(1024, 1024).png().toFile('../assets/android-icon-foreground.png');
-  const field = { strips: PAPER, frame: INK, dogear: HIGHLIGHT }[CHOSEN];
+  const field = { strips: PAPER, frame: INK, dogear: HIGHLIGHT, viewfinder: INK }[CHOSEN];
   await sharp({ create: { width: 1024, height: 1024, channels: 4, background: field } }).png().toFile('../assets/android-icon-background.png');
   await sharp(full).resize(1024, 1024).grayscale().png().toFile('../assets/android-icon-monochrome.png');
   await sharp(full).resize(48, 48).png().toFile('../assets/favicon.png');
@@ -88,7 +126,8 @@ async function writeChosen() {
 /** Each option big, then at 60x60 as it would sit on a home screen, on light and dark wallpaper. */
 async function writeOptions() {
   const names = Object.keys(art);
-  const W = 1500;
+  const COL = 440;
+  const W = 60 + names.length * COL;
   const H = 820;
   const tiles = [];
   for (const [i, n] of names.entries()) {
@@ -98,14 +137,14 @@ async function writeOptions() {
     const small = await sharp(Buffer.from(art[n]())).resize(60, 60).png().toBuffer();
     const smallMask = Buffer.from('<svg width="60" height="60"><rect width="60" height="60" rx="13.5" fill="#fff"/></svg>');
     const smallRounded = await sharp(small).composite([{ input: smallMask, blend: 'dest-in' }]).png().toBuffer();
-    const x = 60 + i * 480;
+    const x = 60 + i * COL;
     tiles.push({ input: bigRounded, left: x, top: 90 });
     tiles.push({ input: smallRounded, left: x + 70, top: 560 });
     tiles.push({ input: smallRounded, left: x + 250, top: 560 });
   }
   const labels = names
     .map((n, i) => {
-      const x = 60 + i * 480 + 190;
+      const x = 60 + i * COL + 190;
       const pick = n === CHOSEN ? ' (picked)' : '';
       return `<text x="${x}" y="56" font-family="Georgia" font-size="34" text-anchor="middle" fill="${INK}">${i + 1}. ${n}${pick}</text>
         <text x="${x - 90}" y="660" font-family="Helvetica" font-size="20" text-anchor="middle" fill="#57524A">60 px, light</text>
@@ -114,7 +153,7 @@ async function writeOptions() {
     .join('');
   const base = Buffer.from(`<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
     <rect width="${W}" height="${H}" fill="${PAPER}"/>
-    ${names.map((_, i) => `<rect x="${60 + i * 480 + 20}" y="520" width="140" height="160" fill="#E3DFD6"/><rect x="${60 + i * 480 + 210}" y="520" width="140" height="160" fill="#111"/>`).join('')}
+    ${names.map((_, i) => `<rect x="${60 + i * COL + 20}" y="520" width="140" height="160" fill="#E3DFD6"/><rect x="${60 + i * COL + 210}" y="520" width="140" height="160" fill="#111"/>`).join('')}
     ${labels}
     <text x="${W / 2}" y="770" font-family="Helvetica" font-size="22" text-anchor="middle" fill="#57524A">Image to Text app icon options. The 60 px tiles are the real home screen size.</text>
   </svg>`);

@@ -29,11 +29,14 @@ Renders: `after/` holds the screens at 393x852 @3x, light and dark, reduced to 1
 
 ## Icon
 
-Three options in `icon-options.png`, each big and at 60 px on light and dark wallpaper, drawn by `store/icon.js` (`node icon.js options`; `node icon.js` writes `assets/` and the website images):
+Four options in `icon-options.png`, each big and at 60 px on light and dark wallpaper, drawn by `store/icon.js` (`node icon.js options`; `node icon.js` writes `assets/` and the website images):
 
-1. strips: a photo (a small landscape) held by a black album corner; its lower edge turns into lines of text, the first under the highlighter. The literal brief, and the first pick, but at 60 px its text lines thin out to almost nothing on a real home screen.
-2. frame (picked, Oct 22, Brian's call after reviewing the renders): camera framing corners in paper on an ink tile, with one line of text under the highlighter and a second line in paper inside the frame. At 60 px the corners and the highlighted line still read clearly, on light and dark wallpaper alike. Same palette as the app: ink tile, paper corners, highlighter line.
-3. dogear: a page with a folded corner on highlighter, picture on top and lines below. The loudest at 60 px, but the corner is a page corner rather than a photo corner, and a full highlighter field spends the one accent on the background.
+1. strips: a photo (a small landscape) held by a black album corner; its lower edge turns into lines of text, the first under the highlighter. The first pick; at 60 px its text lines thin out to almost nothing on a real home screen.
+2. frame: camera framing corners in paper on an ink tile, a highlighted line and a paper line inside. Picked for a few hours on Oct 22, then rejected with strips: neither says "image to text".
+3. dogear: a page with a folded corner on highlighter, picture on top and lines below. The corner is a page corner rather than a photo corner, and a full highlighter field spends the one accent on the background.
+4. viewfinder (picked, Oct 22, Brian's concept): on an ink tile, four camera viewfinder corners in paper (stroke 34, arms 110, spanning x 120 to 904 and y 110 to 520) around a handwritten "Aa" (Caveat SemiBold, 420 px, tilted 4 degrees counterclockwise, like pen on paper), and below it a highlighter bar (radius 36, y 640 to 870, just wider than the word) with the same "Aa" typed in a heavy sans (Inter Black, 300 px) in paper. Handwriting in a camera frame on top, typed text on the highlighter below: the whole app in one tile. At 60 px both "Aa"s and the corners still read, on light and dark wallpaper.
+
+The letters are drawn as outlines from the font files (opentype.js), so the icon renders the same on any machine. Caveat SemiBold (`assets/fonts/Caveat_600SemiBold.ttf`, license `assets/fonts/OFL-Caveat.txt`) is a static weight 600 instance of the variable Caveat from google/fonts ofl/caveat. Inter Black (`store/fonts/Inter_900Black.ttf`, license `store/fonts/OFL-Inter.txt`) is a static weight 900 instance of Inter from google/fonts ofl/inter; it is used only by the icon script and is not in the app. Neither license names a Reserved Font Name.
 
 ## Checklist
 
@@ -45,4 +48,4 @@ Three options in `icon-options.png`, each big and at 60 px on light and dark wal
 - [x] Dynamic Type: body text scales; display and toolbar text cap at 1.3 to 1.5x so nothing clips. Designed for, not yet checked on a device.
 - [x] Copy voice grep-checked: no Unlock, Premium, Seamless, Effortless, Welcome, Let's, exclamation marks or em dashes in user-facing text.
 - [x] `after/*.png`: Home empty and with history, camera, crop, reading, result raw and cleaned, the word source tray, the export tray, batch and reorder, both paywalls, the free PDF preview, settings, all five onboarding steps; light and dark.
-- [x] Icon options drawn; frame picked (it replaced strips on Oct 22) and written to `assets/` and the website images.
+- [x] Icon options drawn; viewfinder picked (Brian's concept, it replaced strips and frame on Oct 22) and written to `assets/` and the website images.

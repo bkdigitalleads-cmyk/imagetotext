@@ -12,10 +12,10 @@ Home screen name (app.json `name`): Image to Text
 ## Subtitle (27/30)
 Text Scanner, Copy & Export
 
-## Keywords (97/100), proposed
+## Keywords (97/100)
 photo,picture,scan,extract,convert,notes,document,pdf,whiteboard,receipt,camera,paste,recognition
 
-Brian's list was `photo,picture,scan,extract,convert,notes,document,pdf,whiteboard,receipt,camera,copy,paste,recognition,translate`, which is 112 characters (Apple's limit is 100) and repeats "copy" from the subtitle. The proposal drops "copy" (already indexed from the subtitle) and "translate" (the app does not translate, and Apple can reject keywords for features an app does not have). Brian to confirm or pick another 7 characters to cut.
+(Brian approved, Oct 22.) The first list also had "copy" (already in the subtitle) and "translate" (the app does not translate, and Apple can reject keywords for features an app does not have), which made it 112 characters, over Apple's 100.
 
 Rule: no word from the name or subtitle (image, to, text, handwriting, ocr, scanner, copy, export).
 
