@@ -20,7 +20,7 @@
     "android": {
       "package": "com.bwk.imagetotext",
       "adaptiveIcon": {
-        "backgroundColor": "#F4EFE4",
+        "backgroundColor": "#1D1B17",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

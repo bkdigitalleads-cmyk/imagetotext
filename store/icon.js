@@ -8,8 +8,9 @@ const sharp = require('sharp');
 //             lines of text, the middle one under the highlighter
 //   frame   - camera framing corners on ink, a highlighted line inside
 //   dogear  - a page with a folded corner on highlighter: picture on top, lines below
-// Chosen: strips. See docs/design/NOTES.md for why.
-const CHOSEN = 'strips';
+// Chosen: frame (Brian, Oct 22, after the 60 px comparison: the strips'
+// text lines disappear at home screen size). See docs/design/NOTES.md.
+const CHOSEN = 'frame';
 
 const PAPER = '#F4EFE4';
 const SHEET = '#FBF8F1';
@@ -65,7 +66,8 @@ async function writeChosen() {
   // App Store icon: no transparency.
   await sharp(full).flatten({ background: PAPER }).resize(1024, 1024).png().toFile('../assets/icon.png');
   await sharp(full).resize(1024, 1024).png().toFile('../assets/android-icon-foreground.png');
-  await sharp({ create: { width: 1024, height: 1024, channels: 4, background: PAPER } }).png().toFile('../assets/android-icon-background.png');
+  const field = { strips: PAPER, frame: INK, dogear: HIGHLIGHT }[CHOSEN];
+  await sharp({ create: { width: 1024, height: 1024, channels: 4, background: field } }).png().toFile('../assets/android-icon-background.png');
   await sharp(full).resize(1024, 1024).grayscale().png().toFile('../assets/android-icon-monochrome.png');
   await sharp(full).resize(48, 48).png().toFile('../assets/favicon.png');
   await sharp(full).resize(512, 512).png().toFile('../assets/splash-icon.png');

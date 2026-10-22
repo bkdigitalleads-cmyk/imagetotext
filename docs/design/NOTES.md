@@ -31,8 +31,8 @@ Renders: `after/` holds the screens at 393x852 @3x, light and dark, reduced to 1
 
 Three options in `icon-options.png`, each big and at 60 px on light and dark wallpaper, drawn by `store/icon.js` (`node icon.js options`; `node icon.js` writes `assets/` and the website images):
 
-1. strips (picked): a photo (a small landscape) held by a black album corner; its lower edge turns into lines of text, the first under the highlighter. It is the brief exactly, a photo corner turning into a line of text, and at 60 px it still reads as picture above, lines below.
-2. frame: camera framing corners on ink with a highlighted line inside. Clear at 60 px, but it is the look most scanner apps already use.
+1. strips: a photo (a small landscape) held by a black album corner; its lower edge turns into lines of text, the first under the highlighter. The literal brief, and the first pick, but at 60 px its text lines thin out to almost nothing on a real home screen.
+2. frame (picked, Oct 22, Brian's call after reviewing the renders): camera framing corners in paper on an ink tile, with one line of text under the highlighter and a second line in paper inside the frame. At 60 px the corners and the highlighted line still read clearly, on light and dark wallpaper alike. Same palette as the app: ink tile, paper corners, highlighter line.
 3. dogear: a page with a folded corner on highlighter, picture on top and lines below. The loudest at 60 px, but the corner is a page corner rather than a photo corner, and a full highlighter field spends the one accent on the background.
 
 ## Checklist
@@ -45,4 +45,4 @@ Three options in `icon-options.png`, each big and at 60 px on light and dark wal
 - [x] Dynamic Type: body text scales; display and toolbar text cap at 1.3 to 1.5x so nothing clips. Designed for, not yet checked on a device.
 - [x] Copy voice grep-checked: no Unlock, Premium, Seamless, Effortless, Welcome, Let's, exclamation marks or em dashes in user-facing text.
 - [x] `after/*.png`: Home empty and with history, camera, crop, reading, result raw and cleaned, the word source tray, the export tray, batch and reorder, both paywalls, the free PDF preview, settings, all five onboarding steps; light and dark.
-- [x] Icon options drawn, strips picked and written to `assets/`.
+- [x] Icon options drawn; frame picked (it replaced strips on Oct 22) and written to `assets/` and the website images.
