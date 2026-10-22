@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bkdigitalleads-cmyk.github.io/imagetotext/sitemap.xml

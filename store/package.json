@@ -1,0 +1,8 @@
+{
+  "name": "store",
+  "private": true,
+  "description": "Icon generator only (node icon.js). Not part of the app bundle.",
+  "dependencies": {
+    "sharp": "^0.35.3"
+  }
+}
