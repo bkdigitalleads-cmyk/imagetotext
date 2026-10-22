@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "Image to Text",
+    "slug": "imagetotext",
+    "scheme": "imagetotext",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.bwk.imagetotext",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSApplicationCategoryType": "public.app-category.productivity"
+      }
+    },
+    "android": {
+      "package": "com.bwk.imagetotext",
+      "adaptiveIcon": {
+        "backgroundColor": "#1D1B17",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Image to Text uses the camera to photograph pages, notes and receipts and read the text on this iPhone. Photos are not uploaded.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Image to Text opens the photos you pick and reads the text in them on this iPhone. Nothing is uploaded.",
+          "cameraPermission": "Image to Text uses the camera to photograph pages, notes and receipts and read the text on this iPhone. Photos are not uploaded.",
+          "microphonePermission": false
+        }
+      ],
+      "./plugins/withoutPushEntitlement"
+    ],
+    "extra": {
+      "revenueCatApiKeyIos": "appl_bWAdDgpvJGpHZsbZtJmWnmdMcxT",
+      "eas": {
+        "projectId": "a0104a65-0c22-44a1-9ac0-c8dd98f6a5cf"
+      }
+    },
+    "owner": "bkdeveloper123"
+  }
+}

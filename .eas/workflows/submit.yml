@@ -1,0 +1,13 @@
+name: Submit iOS
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        type: string
+        required: true
+        description: Build ID to submit
+jobs:
+  submit:
+    type: submit
+    params:
+      build_id: ${{ inputs.build_id }}
