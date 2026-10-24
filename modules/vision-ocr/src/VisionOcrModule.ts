@@ -18,6 +18,8 @@ interface NativeVisionOcr {
   documentBounds(uri: string): Promise<{ found: boolean; confidence: number; method: string; corners: number[]; width: number; height: number }>;
   flatten(uri: string, options: { corners: number[] }): Promise<RenderedPage>;
   recognizeRegions(uri: string, options: RecognizeOptions & { boxes: number[]; scale: number }): Promise<RegionsResult>;
+  sharpness(uri: string, options: { region: number[]; size: number }): Promise<number>;
+  focusAt(x: number, y: number, hold: number): Promise<boolean>;
 }
 
 // Optional so the JS still loads where the native side is missing (web
@@ -107,4 +109,34 @@ export async function recognizeRegions(uri: string, boxes: OcrBox[], options: Re
     candidates: options.candidates ?? 3,
     scale: options.scale ?? 2,
   });
+}
+
+/**
+ * How sharp a photo, or a region of it (fractions, top-left origin), is: the
+ * variance of the Laplacian on a small grayscale copy. Higher is sharper.
+ * Null when it cannot be measured.
+ */
+export async function sharpness(uri: string, region?: OcrBox): Promise<number | null> {
+  if (!Native) return null;
+  try {
+    const r = region ? [region.x, region.y, region.width, region.height] : [];
+    const v = await Native.sharpness(uri, { region: r, size: 512 });
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Focus and expose the back camera at a point in the camera's own
+ * coordinates (see focusPoint in src/accuracy.ts), held for `holdSeconds`,
+ * then back to continuous autofocus. False when the camera is not there.
+ */
+export async function focusAt(x: number, y: number, holdSeconds: number): Promise<boolean> {
+  if (!Native) return false;
+  try {
+    return await Native.focusAt(x, y, holdSeconds);
+  } catch {
+    return false;
+  }
 }

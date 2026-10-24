@@ -112,11 +112,14 @@ export function SlipNote({
   text,
   action,
   onClose,
+  closeLabel = 'Dismiss',
 }: {
   theme: Theme;
   text: string;
   action: { label: string; onPress: () => void };
   onClose: () => void;
+  /** The second choice; "Dismiss" unless the note needs a plainer word ("Use anyway"). */
+  closeLabel?: string;
 }) {
   return (
     <View style={[styles.note, { backgroundColor: theme.ink }]} accessibilityLiveRegion="polite">
@@ -125,8 +128,8 @@ export function SlipNote({
         <Pressable onPress={action.onPress} accessibilityRole="button" accessibilityLabel={action.label} hitSlop={8} style={({ pressed }) => [styles.noteAction, pressed && { opacity: 0.6 }]}>
           <Text style={[styles.noteActionText, { color: theme.bg }]}>{action.label}</Text>
         </Pressable>
-        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8} style={({ pressed }) => [styles.noteAction, pressed && { opacity: 0.6 }]}>
-          <Text style={[styles.noteDismiss, { color: theme.bg }]}>Dismiss</Text>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel={closeLabel} hitSlop={8} style={({ pressed }) => [styles.noteAction, pressed && { opacity: 0.6 }]}>
+          <Text style={[styles.noteDismiss, { color: theme.bg }]}>{closeLabel}</Text>
         </Pressable>
       </View>
     </View>

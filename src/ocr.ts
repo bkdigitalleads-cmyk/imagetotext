@@ -6,7 +6,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { documentBounds, flatten, groupParagraphs, orderLines, recognize, recognizeRegions, renderPdf, OcrLine, Quad } from '../modules/vision-ocr';
+import { documentBounds, flatten, groupParagraphs, orderLines, recognize, recognizeRegions, renderPdf, sharpness, OcrLine, Quad } from '../modules/vision-ocr';
 import { addPages, createDoc, getDoc, Page, PageInput, PageOrigin, replacePage, setDocTitle } from './db';
 import { keepPage, removeFiles } from './files';
 import { buildRuns, cleanText, modelText, Run } from './text';
@@ -216,9 +216,10 @@ export async function readIntoDoc(
   let empty = 0;
   const list = opts.replacePageId != null ? sources.slice(0, 1) : sources;
   for (const [i, src] of list.entries()) {
+    const sharp = await sharpness(src.uri);
     const page = await readPage(src, opts.languages);
     const files = await keepPage(src.uri, opts.keepOriginals);
-    pages.push({ ...files, ...page, origin: opts.origin });
+    pages.push({ ...files, ...page, origin: opts.origin, sharpness: sharp });
     if (page.lines.length > 0) read++;
     else empty++;
     opts.onPage?.(i + 1);

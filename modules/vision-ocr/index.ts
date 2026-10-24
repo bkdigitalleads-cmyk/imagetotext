@@ -4,12 +4,14 @@ export * from './src/VisionOcr.types';
 export {
   documentBounds,
   flatten,
+  focusAt,
   isAvailable,
   recognize,
   recognizeRegions,
   renderPdf,
+  sharpness,
   supportedLanguages,
   OcrUnavailableError,
 } from './src/VisionOcrModule';
-export { groupParagraphs, orderLines, paragraphText } from './src/paragraphs';
+export { flipVisionBox, groupParagraphs, LIST_MARKER, orderLines, PARAGRAPH_GAP, paragraphText } from './src/paragraphs';
 export type { Paragraph } from './src/paragraphs';

@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, Image, Linking, Modal, PanResponder, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Image, Linking, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { darkTheme, fonts, lightTheme, radius, tabular } from '../theme';
 import { useApp } from '../state';
 import { applyCrop, Crop, detectPage, readIntoDoc, ReadResult, Source, turnedSize } from '../ocr';
-import { isConvex, quadBounds, turnQuad } from '../accuracy';
+import { BLUR_THRESHOLD, FOCUS_HOLD_SECONDS, focusPoint, isBlurry, isConvex, quadBounds, turnQuad } from '../accuracy';
+import { focusAt, sharpness } from '../../modules/vision-ocr';
 import type { Quad } from '../../modules/vision-ocr';
 import { captureHaptic, useReduceMotion } from '../ui/motion';
 import { GlyphButton, InkButton, LiveButton, Tap, WordButton } from '../ui/Tap';
+import { SlipNote } from '../ui/Paper';
 
 /**
  * Getting pages in: the camera with a page-shaped guide, then crop and
@@ -175,17 +177,40 @@ export default function CaptureFlow({
 
 function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onShot: (src: Source, crop: Crop) => void; onClose: () => void }) {
   const insets = useSafeAreaInsets();
+  const reduce = useReduceMotion();
   const [perm, requestPerm] = useCameraPermissions();
   const camera = useRef<CameraView>(null);
   const [torch, setTorch] = useState(false);
   const [busy, setBusy] = useState(false);
   const [area, setArea] = useState({ width: 0, height: 0 });
+  // A capture that measured blurry, waiting for Retake or Use anyway.
+  const [blurry, setBlurry] = useState<{ src: Source; crop: Crop } | null>(null);
+  // The focus ring where the preview was last tapped.
+  const [ring, setRing] = useState<{ x: number; y: number; key: number } | null>(null);
+  const ringFade = useRef(new Animated.Value(0)).current;
+  const ringScale = useRef(new Animated.Value(1)).current;
 
   // A page-shaped guide: most of the width, a letter page's proportions.
   const gw = area.width - 48;
   const gh = Math.min(gw * 1.3, area.height - 150);
   const gx = (area.width - gw) / 2;
   const gy = Math.max(70, (area.height - gh) / 2 - 10);
+
+  /** Tap to focus: focus and expose at that point, held briefly, with a ring that fades. */
+  const tapToFocus = (x: number, y: number) => {
+    const p = focusPoint({ x, y }, area);
+    focusAt(p.x, p.y, FOCUS_HOLD_SECONDS);
+    setRing({ x, y, key: Date.now() });
+    ringFade.setValue(1);
+    ringScale.setValue(reduce ? 1 : 1.35);
+    Animated.parallel([
+      Animated.timing(ringScale, { toValue: 1, duration: reduce ? 0 : 220, useNativeDriver: true }),
+      Animated.sequence([
+        Animated.delay(FOCUS_HOLD_SECONDS * 1000 - 600),
+        Animated.timing(ringFade, { toValue: 0, duration: 600, useNativeDriver: true }),
+      ]),
+    ]).start();
+  };
 
   const shoot = async () => {
     if (busy || !camera.current) return;
@@ -205,7 +230,12 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
       const y = Math.max(0, (gy + offY) / scale - src.height * m);
       const w = Math.min(src.width - x, gw / scale + src.width * m * 2);
       const h = Math.min(src.height - y, gh / scale + src.height * m * 2);
-      onShot(src, w > 50 && h > 50 ? { turns: 0, x, y, width: w, height: h } : fullCrop(src));
+      const crop = w > 50 && h > 50 ? { turns: 0, x, y, width: w, height: h } : fullCrop(src);
+      // A soft photo reads badly; say so before it is used. Measured on the page area only.
+      const sharp = await sharpness(src.uri, { x: crop.x / src.width, y: crop.y / src.height, width: crop.width / src.width, height: crop.height / src.height });
+      console.log(`[ocr] capture sharpness ${sharp == null ? 'unknown' : Math.round(sharp)} (blurry under ${BLUR_THRESHOLD})`);
+      if (isBlurry(sharp)) setBlurry({ src, crop });
+      else onShot(src, crop);
     } catch {
       // the camera hiccuped; the button works again
     } finally {
@@ -233,19 +263,49 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
 
   return (
     <View style={styles.root} onLayout={(e) => setArea(e.nativeEvent.layout)}>
-      <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" enableTorch={torch} autofocus="on" />
+      {/* expo-camera's autofocus "off" is continuous autofocus; "on" focuses once and locks (build 1's soft photos). */}
+      <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" enableTorch={torch} autofocus="off" />
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={(e) => tapToFocus(e.nativeEvent.locationX, e.nativeEvent.locationY)}
+        accessibilityRole="button"
+        accessibilityLabel="Camera view"
+        accessibilityHint="Tap the page to focus on it"
+      />
       {area.width > 0 && (
         <>
           {/* the dim surround and the guide's corners */}
-          <View style={[styles.dim, { left: 0, right: 0, top: 0, height: gy }]} />
-          <View style={[styles.dim, { left: 0, right: 0, top: gy + gh, bottom: 0 }]} />
-          <View style={[styles.dim, { left: 0, width: gx, top: gy, height: gh }]} />
-          <View style={[styles.dim, { right: 0, width: gx, top: gy, height: gh }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: 0, right: 0, top: 0, height: gy }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: 0, right: 0, top: gy + gh, bottom: 0 }]} />
+          <View pointerEvents="none" style={[styles.dim, { left: 0, width: gx, top: gy, height: gh }]} />
+          <View pointerEvents="none" style={[styles.dim, { right: 0, width: gx, top: gy, height: gh }]} />
           <Corners x={gx} y={gy} w={gw} h={gh} area={area} />
-          <Text style={[styles.hint, { top: gy - 44 }]} maxFontSizeMultiplier={1.3}>
+          {ring && (
+            <Animated.View
+              key={ring.key}
+              pointerEvents="none"
+              style={[styles.focusRing, { left: ring.x - 34, top: ring.y - 34, opacity: ringFade, transform: [{ scale: ringScale }] }]}
+            />
+          )}
+          <Text pointerEvents="none" style={[styles.hint, { top: gy - 44 }]} maxFontSizeMultiplier={1.3}>
             {pageNumber > 1 ? `Page ${pageNumber}. ` : ''}Fill the frame with the page, straight on.
           </Text>
         </>
+      )}
+      {blurry && (
+        <View style={[styles.blurSlip, { bottom: Math.max(insets.bottom, 16) + 120 }]}>
+          <SlipNote
+            theme={room}
+            text="That looks blurry. Hold still and tap the page to focus."
+            action={{ label: 'Retake', onPress: () => setBlurry(null) }}
+            closeLabel="Use anyway"
+            onClose={() => {
+              const b = blurry;
+              setBlurry(null);
+              onShot(b.src, b.crop);
+            }}
+          />
+        </View>
       )}
       <View style={[styles.cameraBar, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
         <GlyphButton theme={room} glyph="close" label="Close the camera" onPress={onClose} color={PAPER} size={52} />
@@ -525,6 +585,8 @@ const styles = StyleSheet.create({
   dim: { position: 'absolute', backgroundColor: 'rgba(10, 9, 8, 0.5)' },
   hint: { position: 'absolute', left: 24, right: 24, textAlign: 'center', color: PAPER, fontSize: 17, fontWeight: fonts.weight.semibold },
   cameraBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingTop: 16 },
+  focusRing: { position: 'absolute', width: 68, height: 68, borderRadius: 34, borderWidth: 2, borderColor: PAPER },
+  blurSlip: { position: 'absolute', left: 16, right: 16 },
   shutterRing: { width: 84, height: 84, borderRadius: 42, borderWidth: 3, borderColor: PAPER, alignItems: 'center', justifyContent: 'center' },
   shutter: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center' },
   cropTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, minHeight: 52 },

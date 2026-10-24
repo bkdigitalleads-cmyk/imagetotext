@@ -64,11 +64,13 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   if (version >= SCHEMA_VERSION) return;
   // Version 1 is the tables above. Each later step runs once on existing installs.
   if (version < 2) {
-    // Build 2: where a page came from (for Retake) and whether its "hard to read" note was shown.
+    // Build 2: where a page came from (for Retake), whether its "hard to read" note was shown,
+    // and how sharp the photo was (so the note can mention focus).
     const cols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(pages)');
     const has = (n: string) => cols.some((c) => c.name === n);
     if (!has('origin')) await db.execAsync("ALTER TABLE pages ADD COLUMN origin TEXT NOT NULL DEFAULT ''");
     if (!has('nudge_seen')) await db.execAsync('ALTER TABLE pages ADD COLUMN nudge_seen INTEGER NOT NULL DEFAULT 0');
+    if (!has('sharpness')) await db.execAsync('ALTER TABLE pages ADD COLUMN sharpness REAL');
   }
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
@@ -124,6 +126,8 @@ export interface Page {
   origin: PageOrigin;
   /** The "hard to read" note was already shown for this page. */
   nudgeSeen: boolean;
+  /** Sharpness of the page photo (variance of the Laplacian), or null when not measured. */
+  sharpness: number | null;
 }
 
 export type PageOrigin = 'scan' | 'photos' | 'files' | '';
@@ -169,6 +173,7 @@ function rowToPage(r: any): Page {
     editedText: r.edited_text ?? null,
     origin: r.origin === 'scan' || r.origin === 'photos' || r.origin === 'files' ? r.origin : '',
     nudgeSeen: r.nudge_seen === 1,
+    sharpness: typeof r.sharpness === 'number' ? r.sharpness : null,
   };
 }
 
@@ -179,6 +184,7 @@ export interface PageInput {
   height: number;
   lines: OcrLine[];
   origin: PageOrigin;
+  sharpness: number | null;
 }
 
 export async function createDoc(): Promise<number> {
@@ -197,9 +203,9 @@ export async function addPages(docId: number, pages: PageInput[]): Promise<void>
     let pos = (row?.n ?? -1) + 1;
     for (const p of pages) {
       await db.runAsync(
-        `INSERT INTO pages (doc_id, position, image, thumb, width, height, lines_json, edited_text, origin, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-        [docId, pos++, p.image, p.thumb, Math.round(p.width), Math.round(p.height), JSON.stringify(p.lines), p.origin, now, now]
+        `INSERT INTO pages (doc_id, position, image, thumb, width, height, lines_json, edited_text, origin, sharpness, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+        [docId, pos++, p.image, p.thumb, Math.round(p.width), Math.round(p.height), JSON.stringify(p.lines), p.origin, p.sharpness, now, now]
       );
     }
   });
@@ -271,8 +277,8 @@ export async function replacePage(pageId: number, p: PageInput): Promise<string[
   const old = await db.getFirstAsync<any>('SELECT image, thumb FROM pages WHERE id = ?', [pageId]);
   await db.runAsync(
     `UPDATE pages SET image = ?, thumb = ?, width = ?, height = ?, lines_json = ?, edited_text = NULL, origin = ?,
-       nudge_seen = 0, updated_at = ? WHERE id = ?`,
-    [p.image, p.thumb, Math.round(p.width), Math.round(p.height), JSON.stringify(p.lines), p.origin, Date.now(), pageId]
+       sharpness = ?, nudge_seen = 0, updated_at = ? WHERE id = ?`,
+    [p.image, p.thumb, Math.round(p.width), Math.round(p.height), JSON.stringify(p.lines), p.origin, p.sharpness, Date.now(), pageId]
   );
   return old ? [old.image, old.thumb].filter(Boolean) : [];
 }

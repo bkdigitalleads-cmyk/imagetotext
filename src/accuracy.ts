@@ -24,6 +24,16 @@ export const PAGE_MIN_AREA = 0.15;
 /** An outline covering more than this share is the whole photo already (a screenshot, a scan): keep the plain crop. */
 export const PAGE_MAX_AREA = 0.97;
 
+/**
+ * Below this sharpness (variance of the Laplacian on a 512 px grayscale
+ * copy) a photo counts as blurry. A first guess from typical values (sharp
+ * printed or handwritten pages score in the hundreds or more, soft ones in
+ * the tens); every capture logs its number so it can be tuned on device.
+ */
+export const BLUR_THRESHOLD = 100;
+/** A tap holds focus and exposure at its point this long, then autofocus goes back to continuous. */
+export const FOCUS_HOLD_SECONDS = 3;
+
 // ---------- second pass ----------
 
 /**
@@ -171,4 +181,35 @@ export function quadBounds(q: Quad): { x: number; y: number; width: number; heig
   const x = Math.min(...xs);
   const y = Math.min(...ys);
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+// ---------- focus and blur ----------
+
+/** Whether a sharpness number means the photo is too soft to read well. Unknown is not blurry. */
+export function isBlurry(sharpness: number | null | undefined): boolean {
+  return sharpness != null && sharpness > 0 && sharpness < BLUR_THRESHOLD;
+}
+
+/**
+ * A tap on the camera preview as a point in the camera's own coordinates:
+ * (0, 0) top left and (1, 1) bottom right with the phone landscape, home
+ * side right. The preview fills the view (aspect fill) with a portrait
+ * photo `photoAspect` wide for 1 tall (4:3 sensor, held upright: 0.75).
+ */
+export function focusPoint(tap: Point, view: { width: number; height: number }, photoAspect = 0.75): Point {
+  let u: number;
+  let v: number;
+  if (view.width / view.height < photoAspect) {
+    // The photo is wider than the view: full height, cropped at the sides.
+    const shownW = view.height * photoAspect;
+    u = (tap.x + (shownW - view.width) / 2) / shownW;
+    v = tap.y / view.height;
+  } else {
+    const shownH = view.width / photoAspect;
+    u = tap.x / view.width;
+    v = (tap.y + (shownH - view.height) / 2) / shownH;
+  }
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  // Portrait to the sensor's landscape: the camera's x runs down the screen, its y runs right to left.
+  return { x: clamp(v), y: clamp(1 - u) };
 }

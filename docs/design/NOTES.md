@@ -33,9 +33,11 @@ Brian's build 1 test on a glossy cookbook page showed the engine reads well stra
 
 - Crop: when the page is found, the title says "Page found" and the crop is the page's own outline, drawn as a paper line with a ring on each corner over the dimmed photo. Drag a ring to fit the edge; the outline cannot be twisted. Rotate turns the outline with the photo; the crop glyph ("Use the whole photo") goes back to the plain rectangle, which is also what shows when no page is found. `after/04-crop` now shows this; `after/05-reading` shows the squared-up page.
 - Result: one slip above a page's text when more than 10% of its words were hard to read: "Some words were hard to read. A closer, flatter photo usually fixes it." with Retake and Dismiss. It uses the toast's materials (ink-dark slip, paper text; cream slip with ink text on dim paper) but sits in the page, not over it, and appears once per page. `after/21-result-hard-to-read`.
-- Camera: the hint is now "Fill the frame with the page, straight on." `after/03-camera`.
+- Camera: the hint is now "Fill the frame with the page, straight on." `after/03-camera`. Autofocus is continuous; tap anywhere on the preview to focus there, shown by a thin paper ring (not the highlighter: it is not the live action) that holds for the 3 seconds focus is held and then fades (no scale with Reduce Motion). A capture that measures blurry gets a paper slip over the preview, "That looks blurry. Hold still and tap the page to focus.", with Retake and Use anyway. `after/22-camera-blurry`.
+- Result note, soft photo version: "Some words were hard to read, and the photo looks out of focus. Hold still and tap the page to focus." `after/21-result-hard-to-read` shows it.
+- Lists: handwritten lists keep one item per line in reading order, each item its own paragraph.
 
-Thresholds live in `src/accuracy.ts`: second pass under 0.6 confidence or under 1.2% of the image height, 2x, at most 40 lines; nudge above 10% unsure words; a found page is used at 0.6 confidence, covering 15% to 97% of the photo.
+Thresholds live in `src/accuracy.ts`: second pass under 0.6 confidence or under 1.2% of the image height, 2x, at most 40 lines; nudge above 10% unsure words; a found page is used at 0.6 confidence, covering 15% to 97% of the photo; blurry under a sharpness of 100; focus held 3 seconds. The paragraph gap (0.6 median line heights) is in `modules/vision-ocr/src/paragraphs.ts`.
 
 ## Icon
 

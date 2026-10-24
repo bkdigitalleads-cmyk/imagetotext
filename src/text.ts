@@ -10,8 +10,9 @@ import type { OcrBox, OcrLine } from '../modules/vision-ocr/src/VisionOcr.types'
 
 // ---------- Clean up ----------
 
-/** A list item: "- ", "• ", "* ", "1. ", "2) ", "a) ". Same rule as the paragraph grouping. */
-const LIST_MARKER = /^\s*(?:[-•*·]|\d{1,3}[.)]|[a-zA-Z][.)])\s+\S/;
+/** A list item: dash, bullet, checkbox, or "1." "2)" "a)". Kept identical to LIST_MARKER in the paragraph grouping. */
+export const LIST_MARKER =
+  /^\s*(?:[-\u2013\u2014\u2022*\u00b7\u25aa\u25e6\u25cb\u25a1\u2610\u2611\u2612\u2713\u2714](?:\s+(?=\S)|(?=[\p{L}"'(]))|\[[ xX\u2713]?\]\s*\S|\d{1,3}[.)]\s+\S|[a-zA-Z][.)]\s+\S)/u;
 
 /** A word cut at the end of a line ("infor-") that the next line finishes in lowercase. */
 const HYPHEN_END = /\p{L}-$/u;

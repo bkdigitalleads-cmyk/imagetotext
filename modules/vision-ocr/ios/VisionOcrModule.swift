@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreImage
 import ExpoModulesCore
 import PDFKit
@@ -13,12 +14,18 @@ import Vision
 //   documentBounds(uri)       -> { found, confidence, method, corners: [tlx, tly, trx, try, brx, bry, blx, bly], width, height }
 //   flatten(uri, options)     -> { uri, width, height }  (perspective-corrected page)
 //   recognizeRegions(uri, options) -> { elapsedMs, results: [{ text, confidence, words, alternatives }] }
+//   sharpness(uri, options)   -> variance of the Laplacian on a small grayscale copy (higher is sharper)
+//   focusAt(x, y, hold)       -> focus and expose the back camera at a point, then back to continuous
 //
 // Corners are pixels of the image as shown (orientation applied), origin at
 // the top left.
 //
 // Boxes are fractions of the image (0...1) with the origin at the TOP left,
-// the way React Native lays things out (Vision's own origin is bottom left).
+// the way React Native lays things out. Vision's own boxes have the origin
+// at the BOTTOM left; every box leaving this module goes through `box(_:)`
+// or the same math (y = 1 - y - height): line boxes, word boxes, second-pass
+// words and page corners. Vision's result order is not reading order; the
+// TypeScript side sorts lines (paragraphs.ts, orderLines).
 // Word ranges are UTF-16 offsets into the line text, so they index a JS string.
 
 struct RecognizeOptions: Record {
@@ -50,6 +57,13 @@ struct RegionsOptions: Record {
   @Field var candidates: Int = 3
   /// How much each crop is enlarged before it is read again.
   @Field var scale: Double = 2
+}
+
+struct SharpnessOptions: Record {
+  /// Optional region: x, y, width, height as fractions of the image, origin top left.
+  @Field var region: [Double] = []
+  /// Long edge of the grayscale copy the measure runs on, in pixels.
+  @Field var size: Double = 512
 }
 
 final class FlattenException: GenericException<String> {
@@ -97,6 +111,14 @@ public class VisionOcrModule: Module {
 
     AsyncFunction("recognizeRegions") { (uri: String, options: RegionsOptions) -> [String: Any] in
       return try VisionOcrModule.recognizeRegions(uri: uri, options: options)
+    }
+
+    AsyncFunction("sharpness") { (uri: String, options: SharpnessOptions) -> Double in
+      return try VisionOcrModule.sharpness(uri: uri, options: options)
+    }
+
+    AsyncFunction("focusAt") { (x: Double, y: Double, hold: Double) -> Bool in
+      return VisionOcrModule.focusAt(x: x, y: y, hold: hold)
     }
   }
 
@@ -396,6 +418,111 @@ public class VisionOcrModule: Module {
     return ["elapsedMs": (CFAbsoluteTimeGetCurrent() - started) * 1000, "results": collected.all()]
   }
 
+  // MARK: - Sharpness
+
+  /**
+   * How sharp a photo (or a region of it) is: the variance of the Laplacian
+   * on a grayscale copy about `size` pixels on its long edge. Text in focus
+   * has crisp edges and scores high; a soft photo scores low. Cheap: no Vision.
+   */
+  static func sharpness(uri: String, options: SharpnessOptions) throws -> Double {
+    let image = try orientedImage(uri: uri)
+    let W = image.extent.width
+    let H = image.extent.height
+    var region = image.extent
+    let r = options.region
+    if r.count == 4 {
+      region = CGRect(
+        x: CGFloat(r[0]) * W,
+        y: CGFloat(1 - r[1] - r[3]) * H,
+        width: CGFloat(r[2]) * W,
+        height: CGFloat(r[3]) * H
+      ).intersection(image.extent)
+    }
+    guard !region.isNull, region.width > 8, region.height > 8 else { return 0 }
+    var small = image.cropped(to: region).transformed(by: CGAffineTransform(translationX: -region.minX, y: -region.minY))
+    let scale = min(1, CGFloat(max(64, options.size)) / max(region.width, region.height))
+    if scale < 1, let lanczos = CIFilter(name: "CILanczosScaleTransform") {
+      lanczos.setValue(small, forKey: kCIInputImageKey)
+      lanczos.setValue(scale, forKey: kCIInputScaleKey)
+      lanczos.setValue(1.0, forKey: kCIInputAspectRatioKey)
+      if let out = lanczos.outputImage { small = out }
+    }
+    let w = Int(small.extent.width.rounded(.down))
+    let h = Int(small.extent.height.rounded(.down))
+    guard w > 2, h > 2 else { return 0 }
+    var pixels = [UInt8](repeating: 0, count: w * h)
+    ciContext.render(
+      small,
+      toBitmap: &pixels,
+      rowBytes: w,
+      bounds: CGRect(x: small.extent.minX, y: small.extent.minY, width: CGFloat(w), height: CGFloat(h)),
+      format: .L8,
+      colorSpace: CGColorSpaceCreateDeviceGray()
+    )
+    var sum = 0.0
+    var sumSq = 0.0
+    var n = 0.0
+    for y in 1..<(h - 1) {
+      for x in 1..<(w - 1) {
+        let i = y * w + x
+        let v = Double(pixels[i - w]) + Double(pixels[i + w]) + Double(pixels[i - 1]) + Double(pixels[i + 1]) - 4 * Double(pixels[i])
+        sum += v
+        sumSq += v * v
+        n += 1
+      }
+    }
+    guard n > 0 else { return 0 }
+    let mean = sum / n
+    return sumSq / n - mean * mean
+  }
+
+  // MARK: - Tap to focus
+
+  /// Each tap gets a ticket; only the latest tap's timer hands focus back to continuous.
+  static let focusTicket = FocusTicket()
+
+  /**
+   * Focus and expose the back camera at a point, held for `hold` seconds,
+   * then back to continuous autofocus and exposure. The point is in the
+   * camera's own coordinates: (0, 0) top left and (1, 1) bottom right with
+   * the phone turned landscape, home side right. It is the same physical
+   * camera expo-camera shows (the back wide-angle one), so the preview
+   * focuses where it was tapped.
+   */
+  static func focusAt(x: Double, y: Double, hold: Double) -> Bool {
+    guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return false }
+    let point = CGPoint(x: min(1, max(0, x)), y: min(1, max(0, y)))
+    do {
+      try device.lockForConfiguration()
+      if device.isFocusPointOfInterestSupported, device.isFocusModeSupported(.autoFocus) {
+        device.focusPointOfInterest = point
+        device.focusMode = .autoFocus
+      }
+      if device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.autoExpose) {
+        device.exposurePointOfInterest = point
+        device.exposureMode = .autoExpose
+      }
+      device.unlockForConfiguration()
+    } catch {
+      return false
+    }
+    let ticket = VisionOcrModule.focusTicket.next()
+    DispatchQueue.main.asyncAfter(deadline: .now() + max(0.5, hold)) {
+      guard VisionOcrModule.focusTicket.isLatest(ticket),
+            let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+            (try? camera.lockForConfiguration()) != nil else { return }
+      if camera.isFocusModeSupported(.continuousAutoFocus) {
+        camera.focusMode = .continuousAutoFocus
+      }
+      if camera.isExposureModeSupported(.continuousAutoExposure) {
+        camera.exposureMode = .continuousAutoExposure
+      }
+      camera.unlockForConfiguration()
+    }
+    return true
+  }
+
   // MARK: - PDF pages
 
   static func renderPdf(uri: String, options: RenderPdfOptions) throws -> [String: Any] {
@@ -459,6 +586,25 @@ public class VisionOcrModule: Module {
     }
 
     return ["pageCount": count, "pages": pages]
+  }
+}
+
+/// A counter behind a lock, for tap-to-focus timers.
+final class FocusTicket: @unchecked Sendable {
+  private var value = 0
+  private let lock = NSLock()
+
+  func next() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
+    return value
+  }
+
+  func isLatest(_ ticket: Int) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return ticket == value
   }
 }
 

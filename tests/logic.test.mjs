@@ -88,7 +88,7 @@ test('paragraphs: going back up the page (a second column) starts a paragraph; e
   assert.deepEqual(P.groupParagraphs([], W, H), []);
 });
 
-test('orderLines: pieces of one row go left to right and merge across a small gap; columns keep Vision order', () => {
+test('orderLines: pieces of one row go left to right and merge across a small gap; separate rows stay apart', () => {
   const right = line('world', { x: 330, y: 100, w: 150, words: [{ start: 0, end: 5, box: { x: 0.33, y: 0.07, width: 0.15, height: 0.02 } }] });
   const left = line('hello', { x: 100, y: 102, w: 200, words: [{ start: 0, end: 5, box: { x: 0.1, y: 0.07, width: 0.2, height: 0.02 } }] });
   const out = P.orderLines([right, left], W, H);
@@ -396,4 +396,102 @@ test('outline: a quarter turn and back gives the same corners', () => {
   assert.deepEqual(A.unturnQuad(t, size, 3), q);
   assert.deepEqual(A.unturnQuad(q, size, 0), q);
   assert.deepEqual(A.clampQuad([pt(-5, 10), pt(1010, 0), pt(990, 1600), pt(0, 1500)], size)[2], pt(990, 1500));
+});
+
+// ---------- handwriting line order (build 2) ----------
+
+// Brian's handwritten list from the build 1 test, one item per line, left
+// aligned. The second item was cut from his report ("..."), so a stand-in
+// is used for it. Boxes are written the way Vision returns them: fractions
+// with the origin at the BOTTOM left, and in Vision's order for this page,
+// bottom line first. Handwriting: line heights and gaps are uneven.
+const DASH_LIST = [
+  '- Pick up dry cleaning Tuesday after 5',
+  '- Call plumber about the kitchen sink',
+  '- Eggs, bread, ground beef',
+  '- Rent due 11/1, $2,450',
+  '- Meeting w/ Sam moved to 3:30pm',
+  "- Don't forget passport renewal",
+];
+const visionList = () => {
+  // top of each line in top-left fractions, and its height: uneven on purpose
+  const rows = [
+    [0.12, 0.034], [0.178, 0.029], [0.236, 0.037], [0.302, 0.031], [0.356, 0.035], [0.421, 0.03],
+  ];
+  return DASH_LIST.map((text, i) => {
+    const [top, h] = rows[i];
+    const width = 0.4 + (text.length % 7) * 0.05;
+    const x = 0.08 + (i % 3) * 0.004; // left aligned, a hand's wobble
+    return { text, confidence: 0.8, alternatives: [], words: [], box: { x, y: 1 - top - h, width, height: h } }; // bottom-left origin
+  }).reverse(); // Vision's order: bottom to top
+};
+
+test('handwriting: Vision boxes flipped to top-left, the dash list comes out as six lines top to bottom', () => {
+  const fromVision = visionList().map((l) => ({ ...l, box: P.flipVisionBox(l.box) }));
+  // Every flipped box sits where the page has it (the Swift module does the same flip).
+  assert.ok(Math.abs(fromVision[5].box.y - 0.12) < 1e-9);
+  const ordered = P.orderLines(fromVision, 3024, 4032);
+  assert.deepEqual(ordered.map((l) => l.text), DASH_LIST);
+  const paras = P.groupParagraphs(ordered, 3024, 4032);
+  assert.equal(paras.length, 6); // every list item is its own paragraph
+  const groups = paras.map((p) => p.lines);
+  // Never joined to the line before, raw or cleaned up.
+  assert.deepEqual(T.modelText(T.buildRuns(groups, false)).split(/\n+/), DASH_LIST);
+  assert.deepEqual(T.modelText(T.buildRuns(groups, true)).split(/\n+/), DASH_LIST);
+});
+
+test('handwriting: list markers include dashes with or without a space, bullets, checkboxes, numbers', () => {
+  for (const t of ['- Eggs', '-Eggs', '\u2013 Eggs', '\u2022 Eggs', '* Eggs', '[ ] Eggs', '[x] Eggs', '\u2610 Eggs', '1. Eggs', '2) Eggs', 'a) Eggs'])
+    assert.equal(P.LIST_MARKER.test(t), true, t);
+  for (const t of ['-5 degrees', 'Eggs - bread', '1.5 cups', 'well-known']) assert.equal(P.LIST_MARKER.test(t), false, t);
+  assert.equal(P.LIST_MARKER.source, T.LIST_MARKER.source); // the two copies never drift
+  assert.equal(T.cleanText('Shopping\n-Eggs\n-Bread\nand butter'), 'Shopping\n-Eggs\n-Bread and butter');
+});
+
+test('handwriting: the paragraph gap is relative to the page median line height (under 0.6 joins)', () => {
+  assert.equal(P.PARAGRAPH_GAP, 0.6);
+  // Large handwriting: 60 px lines. A 30 px gap (0.5) is the same paragraph, a 40 px gap (0.67) is not.
+  const big = (gap) => [line('first line of a note that runs on', { y: 100, h: 60 }), line('and keeps going here', { y: 160 + gap, h: 60 })];
+  assert.equal(P.groupParagraphs(big(30), W, H).length, 1);
+  assert.equal(P.groupParagraphs(big(40), W, H).length, 2);
+});
+
+test('handwriting: a line written on a slant that Vision splits in two comes out as one line', () => {
+  // "Leaving for Bedford Hills" climbs to the right; "on 6:40 train" continues it a little higher.
+  const a = line('Leaving for Bedford Hills', { x: 100, y: 520, w: 470, h: 60 });
+  const b = line('on 6:40 train', { x: 590, y: 480, w: 260, h: 60 });
+  const below = line('Back by Sunday', { x: 100, y: 640, w: 300, h: 60 });
+  const out = P.orderLines([below, b, a], W, H);
+  assert.deepEqual(out.map((l) => l.text), ['Leaving for Bedford Hills on 6:40 train', 'Back by Sunday']);
+});
+
+test('reading order: two columns of running text are read one after the other; a receipt stays in rows', () => {
+  const col = (x, i, text) => line(text, { x, y: 100 + i * 42, w: 380 });
+  const lines = [col(560, 0, 'right one'), col(60, 0, 'left one'), col(560, 1, 'right two'), col(60, 1, 'left two'), col(60, 2, 'left three')];
+  // Columns that share rows look like a table, so give the right column its own rhythm.
+  lines[0].box.y += 20 / H;
+  lines[2].box.y += 20 / H;
+  assert.deepEqual(P.orderLines(lines, W, H).map((l) => l.text), ['left one', 'left two', 'left three', 'right one', 'right two']);
+  const receipt = [line('9.49', { x: 800, y: 100, w: 80 }), line('AA batteries', { x: 100, y: 100, w: 240 }), line('3.25', { x: 800, y: 142, w: 80 }), line('Picture wire', { x: 100, y: 142, w: 240 })];
+  assert.deepEqual(P.orderLines(receipt, W, H).map((l) => l.text), ['AA batteries', '9.49', 'Picture wire', '3.25']);
+});
+
+// ---------- focus and blur (build 2) ----------
+
+test('focus: a tap on the preview maps to the camera point, center to center, corners to corners', () => {
+  const view = { width: 393, height: 852 }; // narrower than the 3:4 photo: cropped at the sides
+  assert.deepEqual(A.focusPoint({ x: 196.5, y: 426 }, view), { x: 0.5, y: 0.5 });
+  const topLeftShown = A.focusPoint({ x: 0, y: 0 }, view);
+  assert.equal(topLeftShown.x, 0); // top of the screen is the camera's left
+  assert.ok(topLeftShown.y < 1 && topLeftShown.y > 0.5); // left edge of the screen is cropped photo, toward the camera's bottom
+  assert.deepEqual(A.focusPoint({ x: 393, y: 852 }, { width: 393, height: 524 }), { x: 1, y: 0 }); // exactly 3:4: no crop
+  assert.equal(A.FOCUS_HOLD_SECONDS, 3);
+});
+
+test('blur: below the threshold is blurry; unknown or zero is not', () => {
+  assert.equal(A.isBlurry(A.BLUR_THRESHOLD - 1), true);
+  assert.equal(A.isBlurry(A.BLUR_THRESHOLD), false);
+  assert.equal(A.isBlurry(null), false);
+  assert.equal(A.isBlurry(undefined), false);
+  assert.equal(A.isBlurry(0), false);
 });

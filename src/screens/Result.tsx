@@ -12,7 +12,7 @@ import { maybeRequestReview } from '../reviews';
 import { FREE_MAX_PAGES } from '../quota';
 import Glyph, { GlyphName } from '../ui/Glyph';
 import { DIM_PHOTO, Leaf, Mark, Rule, SlipNote, Tray } from '../ui/Paper';
-import { shouldNudge } from '../accuracy';
+import { isBlurry, shouldNudge } from '../accuracy';
 import { GlyphButton, Tap, ToolButton, TopBar, WordButton } from '../ui/Tap';
 import DragList from '../ui/DragList';
 import { copyHaptic, tick } from '../ui/motion';
@@ -264,7 +264,11 @@ export default function ResultScreen({
             {nudges[p.id] && !editing && (
               <SlipNote
                 theme={theme}
-                text="Some words were hard to read. A closer, flatter photo usually fixes it."
+                text={
+                  isBlurry(p.sharpness)
+                    ? 'Some words were hard to read, and the photo looks out of focus. Hold still and tap the page to focus.'
+                    : 'Some words were hard to read. A closer, flatter photo usually fixes it.'
+                }
                 action={{
                   label: 'Retake',
                   onPress: () => {
