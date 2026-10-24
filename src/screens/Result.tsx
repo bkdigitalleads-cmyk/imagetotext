@@ -3,7 +3,7 @@ import { Alert, Image, ScrollView, StyleSheet, Switch, Text, TextInput, useWindo
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, fonts, radius, reading, tabular, Theme } from '../theme';
 import { useApp } from '../state';
-import { deleteDoc, deletePage, Doc, getDoc, Page, reorderPages, setDocCleanUp, setDocTitle, setPageText } from '../db';
+import { deleteDoc, deletePage, Doc, getDoc, markNudgeSeen, Page, reorderPages, setDocCleanUp, setDocTitle, setPageText } from '../db';
 import { removeFiles, scanUri } from '../files';
 import { docText, pageRuns, pageText } from '../ocr';
 import { copyText, exportFile, ExportKind, shareText } from '../exporting';
@@ -11,7 +11,8 @@ import { copiedLine, countWords, firstLine, moveItem, Run } from '../text';
 import { maybeRequestReview } from '../reviews';
 import { FREE_MAX_PAGES } from '../quota';
 import Glyph, { GlyphName } from '../ui/Glyph';
-import { DIM_PHOTO, Leaf, Mark, Rule, Tray } from '../ui/Paper';
+import { DIM_PHOTO, Leaf, Mark, Rule, SlipNote, Tray } from '../ui/Paper';
+import { shouldNudge } from '../accuracy';
 import { GlyphButton, Tap, ToolButton, TopBar, WordButton } from '../ui/Tap';
 import DragList from '../ui/DragList';
 import { copyHaptic, tick } from '../ui/motion';
@@ -31,10 +32,13 @@ export default function ResultScreen({
   docId,
   onBack,
   onAddPage,
+  onRetake,
 }: {
   docId: number;
   onBack: () => void;
   onAddPage: (kind: SourceKind) => void;
+  /** A new photo for one page, from the "hard to read" note. */
+  onRetake: (page: Page) => void;
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -45,6 +49,8 @@ export default function ResultScreen({
   const [picked, setPicked] = useState<{ page: Page; run: Run; index: number } | null>(null);
   const [tray, setTray] = useState<'export' | 'add' | 'pages' | null>(null);
   const [preview, setPreview] = useState(false);
+  // Pages showing the "hard to read" note in this viewing. It is shown once per page, ever.
+  const [nudges, setNudges] = useState<Record<number, boolean>>({});
   const scroll = useRef<ScrollView>(null);
   const pageY = useRef<Record<number, number>>({});
 
@@ -57,6 +63,14 @@ export default function ResultScreen({
   useEffect(() => {
     load().catch(() => setDoc(null));
   }, [load, dataVersion]);
+
+  // A page read with too many unsure words gets the note the first time it is seen.
+  useEffect(() => {
+    const fresh = (doc?.pages ?? []).filter((p) => !p.nudgeSeen && p.editedText == null && shouldNudge(p.lines));
+    if (fresh.length === 0) return;
+    setNudges((n) => ({ ...n, ...Object.fromEntries(fresh.map((p) => [p.id, true])) }));
+    fresh.forEach((p) => markNudgeSeen(p.id).catch(() => {}));
+  }, [doc]);
 
   if (!doc) return <View style={{ flex: 1, backgroundColor: theme.bg }} />;
 
@@ -247,6 +261,20 @@ export default function ResultScreen({
         {pages.map((p, i) => (
           <View key={p.id} onLayout={(e) => (pageY.current[p.id] = e.nativeEvent.layout.y)} style={styles.page}>
             {pages.length > 1 && <Text style={[styles.pageLabel, { color: theme.inkFaint }, tabular]}>Page {i + 1}</Text>}
+            {nudges[p.id] && !editing && (
+              <SlipNote
+                theme={theme}
+                text="Some words were hard to read. A closer, flatter photo usually fixes it."
+                action={{
+                  label: 'Retake',
+                  onPress: () => {
+                    setNudges((n) => ({ ...n, [p.id]: false }));
+                    onRetake(p);
+                  },
+                }}
+                onClose={() => setNudges((n) => ({ ...n, [p.id]: false }))}
+              />
+            )}
             {editing ? (
               <TextInput
                 multiline

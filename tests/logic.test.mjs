@@ -1,5 +1,6 @@
 // Unit checks for the pure logic: paragraph grouping, Clean up, the page
-// model, the daily quota and the trial rules. Run with `npm test` (Node 22+
+// model, the safe fixes, the second pass, the nudge, page outlines, the
+// daily quota and the trial rules. Run with `npm test` (Node 22+
 // strips the TypeScript types itself).
 process.env.TZ = 'America/New_York';
 
@@ -10,6 +11,7 @@ const P = await import('../modules/vision-ocr/src/paragraphs.ts');
 const T = await import('../src/text.ts');
 const Q = await import('../src/quota.ts');
 const O = await import('../src/offer.ts');
+const A = await import('../src/accuracy.ts');
 
 // A page 1000 x 1400 px. Lines are 30 px tall with 12 px between them.
 const W = 1000;
@@ -270,4 +272,128 @@ test('plans: weekly preselected on the onboarding paywall, yearly in the app, wh
   assert.deepEqual(O.planOrder(false), ['ANNUAL', 'WEEKLY']);
   assert.equal(O.yearlySavingPct(4.99, 29.99), 88);
   assert.equal(O.yearlySavingPct(0.5, 29.99), null);
+});
+
+// ---------- safe fixes (build 2) ----------
+
+test('fixes: a lone I or l before a unit in capitals, or before -INCH, is the number 1', () => {
+  assert.equal(T.fixLine('I TABLESPOON OLIVE OIL'), '1 TABLESPOON OLIVE OIL');
+  assert.equal(T.fixLine('l CUP chicken stock'), '1 CUP chicken stock');
+  assert.equal(T.fixLine('2 (I-INCH-THICK) STEAKS'), '2 (1-INCH-THICK) STEAKS');
+  assert.equal(T.fixLine('I-INCH-THICK'), '1-INCH-THICK');
+  assert.equal(T.fixLine('I ½ CUPS FLOUR'), '1 ½ CUPS FLOUR');
+  assert.equal(T.fixLine('I 3/4 TEASPOONS SALT'), '1 3/4 TEASPOONS SALT');
+  assert.equal(T.fixLine('I¼ POUNDS'), '1¼ POUNDS');
+});
+
+test('fixes: nothing changes where I is a word', () => {
+  assert.equal(T.fixLine('I think I can'), 'I think I can');
+  assert.equal(T.fixLine('I CAN SEE IT'), 'I CAN SEE IT');
+  assert.equal(T.fixLine('I cup my hands'), 'I cup my hands'); // a unit in lowercase is not enough
+  assert.equal(T.fixLine('Item I'), 'Item I');
+  assert.equal(T.fixLine('INCH BY INCH'), 'INCH BY INCH');
+  assert.equal(T.fixLine('Il faut'), 'Il faut');
+});
+
+test('fixes: pieced fractions become one fraction character; a % or a plain 3/4 is left alone', () => {
+  assert.equal(T.normalizeFractions('1\u20442 cup'), '½ cup');
+  assert.equal(T.normalizeFractions('¹/₂ tsp and ³⁄₄ cup'), '½ tsp and ¾ cup');
+  assert.equal(T.normalizeFractions('5\u204416'), '5/16'); // no single character: plain digits
+  assert.equal(T.normalizeFractions('3/4 cup'), '3/4 cup');
+  assert.equal(T.normalizeFractions('%4 cup'), '%4 cup');
+  assert.equal(T.normalizeFractions('%% cup'), '%% cup');
+  assert.equal(T.normalizeFractions('11\u20442'), '11/2'); // never guesses a mixed number
+  assert.equal(T.fixLine('  1\u20444  CUP  '), '  ¼  CUP  '); // spacing kept
+});
+
+test('fixes: the page model applies them in raw and cleaned text, and edits are never touched', () => {
+  const paras = [[line('I TABLESPOON 1\u20442 tsp', { y: 100 })]];
+  assert.equal(T.modelText(T.buildRuns(paras, false)), '1 TABLESPOON ½ tsp');
+  assert.equal(T.modelText(T.buildRuns(paras, true)), '1 TABLESPOON ½ tsp');
+  assert.equal(T.rawText(paras), '1 TABLESPOON ½ tsp');
+  assert.equal(T.cleanText('I TABLESPOON'), 'I TABLESPOON'); // cleanText is also used on the person's own edits
+});
+
+// ---------- second pass (build 2) ----------
+
+test('second pass: picks low-confidence and small lines, least sure first when capped, in line order', () => {
+  const lines = [
+    line('fine and big', { y: 100, h: 40, confidence: 1 }),
+    line('unsure', { y: 200, confidence: 0.5 }),
+    line('tiny print', { y: 300, h: 12, confidence: 1 }), // 12/1400 = 0.86% of the height
+    line('very unsure', { y: 400, confidence: 0.3 }),
+    line('   ', { y: 500, confidence: 0.1 }),
+  ];
+  assert.deepEqual(A.pickSecondPass(lines), [1, 2, 3]);
+  assert.deepEqual(A.pickSecondPass(lines, 2), [1, 3]); // the two least confident
+  assert.deepEqual(A.pickSecondPass(lines, 0), []);
+  assert.equal(A.SECOND_PASS_CONFIDENCE, 0.6);
+  assert.equal(A.SECOND_PASS_MAX_LINES, 40);
+  const many = Array.from({ length: 60 }, (_, i) => line(`line ${i}`, { y: i * 20, confidence: 0.2 }));
+  assert.equal(A.pickSecondPass(many).length, 40);
+});
+
+test('second pass: a more confident reading replaces the text and words, the line box stays', () => {
+  const l = line('%4 CUP', { y: 100, confidence: 0.3, alternatives: ['%4 CUR'] });
+  const words = [{ start: 0, end: 1, box: { x: 0.1, y: 0.07, width: 0.02, height: 0.02 } }];
+  const merged = A.mergeSecondPass([l, l], [
+    { index: 0, text: '¾ CUP', confidence: 0.9, words, alternatives: [] },
+    { index: 1, text: 'x CUP', confidence: 0.2, words, alternatives: [] }, // less sure: kept as it was
+  ]);
+  assert.equal(merged[0].text, '¾ CUP');
+  assert.equal(merged[0].confidence, 0.9);
+  assert.deepEqual(merged[0].box, l.box);
+  assert.deepEqual(merged[0].words, words);
+  assert.equal(merged[1].text, '%4 CUP');
+  // Empty readings and unknown indexes are ignored.
+  assert.deepEqual(A.mergeSecondPass([l], [{ index: 0, text: ' ', confidence: 1, words: [], alternatives: [] }, { index: 5, text: 'x', confidence: 1, words: [], alternatives: [] }]), [l]);
+});
+
+// ---------- the nudge (build 2) ----------
+
+test('nudge: shows when more than 10% of the words are on unsure lines', () => {
+  const good = Array.from({ length: 9 }, (_, i) => line('one two three four five', { y: i * 50, confidence: 0.9 }));
+  assert.equal(A.shouldNudge([...good, line('six seven eight nine ten', { y: 600, confidence: 0.5 })]), false); // exactly 10%
+  assert.equal(A.shouldNudge([...good, line('six seven eight nine ten eleven', { y: 600, confidence: 0.5 })]), true);
+  assert.equal(A.shouldNudge([]), false);
+  assert.equal(A.unsureShare([line('- , .', { y: 0, confidence: 0.1 }), line('word', { y: 50, confidence: 0.9 })]), 0); // punctuation is not a word
+});
+
+// ---------- page outlines (build 2) ----------
+
+const pt = (x, y) => ({ x, y });
+
+test('outline: corners in any order come back top-left, top-right, bottom-right, bottom-left', () => {
+  const q = A.orderQuad([pt(900, 1200), pt(100, 150), pt(120, 1180), pt(880, 130)]);
+  assert.deepEqual(q, [pt(100, 150), pt(880, 130), pt(900, 1200), pt(120, 1180)]);
+  assert.equal(A.isConvex(q), true);
+  assert.equal(A.isConvex([pt(0, 0), pt(10, 10), pt(10, 0), pt(0, 10)]), false); // a bow tie
+  assert.equal(A.quadArea([pt(0, 0), pt(10, 0), pt(10, 5), pt(0, 5)]), 50);
+});
+
+test('outline: a found page is used only when confident, big enough, and not the whole photo', () => {
+  const size = { width: 1000, height: 1500 };
+  const page = [pt(100, 150), pt(880, 130), pt(900, 1300), pt(120, 1320)];
+  assert.equal(A.usablePage({ found: true, confidence: 0.9, quad: page }, size), true);
+  assert.equal(A.usablePage({ found: true, confidence: 0.4, quad: page }, size), false);
+  assert.equal(A.usablePage({ found: false, confidence: 0.9, quad: page }, size), false);
+  assert.equal(A.usablePage({ found: true, confidence: 0.9, quad: [pt(0, 0), pt(100, 0), pt(100, 100), pt(0, 100)] }, size), false); // too small
+  assert.equal(A.usablePage({ found: true, confidence: 0.9, quad: [pt(0, 0), pt(1000, 0), pt(1000, 1500), pt(0, 1500)] }, size), false); // the whole photo
+});
+
+test('outline: a quarter turn and back gives the same corners', () => {
+  const size = { width: 1000, height: 1500 };
+  const q = A.orderQuad([pt(100, 150), pt(880, 130), pt(900, 1300), pt(120, 1320)]);
+  const once = A.turnQuad(q, size); // now on a 1500 x 1000 image
+  assert.deepEqual(once[0], pt(180, 120)); // the old bottom-left is the new top-left
+  assert.deepEqual(A.unturnQuad(once, size, 1), q);
+  let t = q;
+  let s = size;
+  for (let k = 0; k < 3; k++) {
+    t = A.turnQuad(t, s);
+    s = { width: s.height, height: s.width };
+  }
+  assert.deepEqual(A.unturnQuad(t, size, 3), q);
+  assert.deepEqual(A.unturnQuad(q, size, 0), q);
+  assert.deepEqual(A.clampQuad([pt(-5, 10), pt(1010, 0), pt(990, 1600), pt(0, 1500)], size)[2], pt(990, 1500));
 });

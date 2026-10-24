@@ -104,6 +104,36 @@ export function Slip({ theme, text, bottom = 0 }: { theme: Theme; text: string |
 }
 
 /**
+ * A slip of ink-dark paper inside the page, above the text, with an action
+ * and a close button: the one place the app admits a photo was hard to read.
+ */
+export function SlipNote({
+  theme,
+  text,
+  action,
+  onClose,
+}: {
+  theme: Theme;
+  text: string;
+  action: { label: string; onPress: () => void };
+  onClose: () => void;
+}) {
+  return (
+    <View style={[styles.note, { backgroundColor: theme.ink }]} accessibilityLiveRegion="polite">
+      <Text style={[styles.noteText, { color: theme.bg }]}>{text}</Text>
+      <View style={styles.noteActions}>
+        <Pressable onPress={action.onPress} accessibilityRole="button" accessibilityLabel={action.label} hitSlop={8} style={({ pressed }) => [styles.noteAction, pressed && { opacity: 0.6 }]}>
+          <Text style={[styles.noteActionText, { color: theme.bg }]}>{action.label}</Text>
+        </Pressable>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8} style={({ pressed }) => [styles.noteAction, pressed && { opacity: 0.6 }]}>
+          <Text style={[styles.noteDismiss, { color: theme.bg }]}>Dismiss</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/**
  * A tray of paper that slides up from the bottom (export choices, the
  * source of a word, the page order). A transparent modal, so it sits above
  * everything, closed by the backdrop or the close word.
@@ -179,6 +209,12 @@ const styles = StyleSheet.create({
   slipWrap: { position: 'absolute', left: 16, right: 16, alignItems: 'center' },
   slip: { paddingHorizontal: 18, paddingVertical: 12, borderRadius: radius.sheet, maxWidth: 420 },
   slipText: { fontSize: 16, fontWeight: fonts.weight.semibold, lineHeight: 21 },
+  note: { borderRadius: radius.sheet, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4, marginBottom: 18 },
+  noteText: { fontSize: 16, lineHeight: 22, fontWeight: fonts.weight.semibold },
+  noteActions: { flexDirection: 'row', gap: 22 },
+  noteAction: { minHeight: 44, justifyContent: 'center' },
+  noteActionText: { fontSize: 16, fontWeight: fonts.weight.bold, textDecorationLine: 'underline' },
+  noteDismiss: { fontSize: 16, opacity: 0.75 },
   trayRoot: { flex: 1, justifyContent: 'flex-end' },
   tray: { borderTopLeftRadius: radius.tray, borderTopRightRadius: radius.tray, paddingTop: 8 },
   handle: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, marginBottom: 8 },

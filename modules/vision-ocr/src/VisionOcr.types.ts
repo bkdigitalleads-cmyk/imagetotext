@@ -56,3 +56,39 @@ export interface RenderPdfResult {
   pageCount: number;
   pages: RenderedPage[];
 }
+
+/** A point in pixels of the image as shown, origin at the top left. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** A page outline: top-left, top-right, bottom-right, bottom-left. */
+export type Quad = [Point, Point, Point, Point];
+
+export interface DocumentBounds {
+  found: boolean;
+  /** Vision's confidence in the outline, 0 to 1. */
+  confidence: number;
+  /** Which request found it. */
+  method: 'segmentation' | 'rectangle' | 'none';
+  quad: Quad | null;
+  /** Pixel size of the image the corners refer to. */
+  width: number;
+  height: number;
+}
+
+/** One region read again in the second pass. Empty text means nothing was found. */
+export interface RegionReading {
+  text: string;
+  confidence: number;
+  /** Word boxes in fractions of the whole page. */
+  words: OcrWord[];
+  alternatives: string[];
+}
+
+export interface RegionsResult {
+  /** Time the native side spent, crops and reading included. */
+  elapsedMs: number;
+  results: RegionReading[];
+}

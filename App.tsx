@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { useTheme, FONT_FILES } from './src/theme';
 import { AppProvider, useApp, ONBOARDED_KEY } from './src/state';
-import { countDocs, countPages, kvGet, kvSet } from './src/db';
+import { countDocs, countPages, kvGet, kvSet, Page } from './src/db';
 import { gateNewPage, pagesAllowed } from './src/quota';
 import { pickFiles, pickPhotos, Source } from './src/ocr';
 import HomeScreen from './src/screens/Home';
@@ -32,7 +32,7 @@ function Shell() {
   // New installs: three value screens, the trial and reminder screens, then the paywall.
   const [step, setStep] = useState<'welcome' | 'trial' | 'paywall'>('welcome');
   const paywallOpened = useRef(false);
-  const [capture, setCapture] = useState<{ start: CaptureStart; docId: number | null; allowed: number } | null>(null);
+  const [capture, setCapture] = useState<{ start: CaptureStart; docId: number | null; allowed: number; replacePageId?: number } | null>(null);
 
   useEffect(() => {
     if (!ready || onboarded !== null) return;
@@ -78,22 +78,38 @@ function Shell() {
     return Number.isFinite(n) ? n : 0;
   };
 
+  /** Photos or files picked for `kind`, up to `limit` (0 = no limit). Null when the file would not open. */
+  const pick = async (kind: 'photos' | 'files', limit: number): Promise<Source[] | null> => {
+    try {
+      if (kind === 'photos') return await pickPhotos(limit);
+      const picked = await pickFiles(limit);
+      if (picked.skipped > 0 && !isPro) say(`Reading the first ${picked.sources.length}. Pro reads every page.`);
+      return picked.sources;
+    } catch (e: any) {
+      Alert.alert('That file did not open', /password/i.test(e?.message ?? '') ? 'This PDF has a password. Open it somewhere else first, or use a screenshot.' : 'Try another one, or a photo of it.');
+      return null;
+    }
+  };
+
   const startFrom = async (kind: SourceKind, docId: number | null) => {
     const allowed = await allowance(docId);
     if (allowed == null) return;
     if (kind === 'scan') return setCapture({ start: { kind: 'camera' }, docId, allowed });
-    try {
-      let sources: Source[] = [];
-      if (kind === 'photos') sources = await pickPhotos(allowed);
-      else {
-        const picked = await pickFiles(allowed);
-        sources = picked.sources;
-        if (picked.skipped > 0 && !isPro) say(`Reading the first ${sources.length}. Pro reads every page.`);
-      }
-      if (sources.length > 0) setCapture({ start: { kind: 'sources', sources }, docId, allowed });
-    } catch (e: any) {
-      Alert.alert('That file did not open', /password/i.test(e?.message ?? '') ? 'This PDF has a password. Open it somewhere else first, or use a screenshot.' : 'Try another one, or a photo of it.');
-    }
+    const sources = await pick(kind, allowed);
+    if (sources && sources.length > 0) setCapture({ start: { kind: 'sources', sources, origin: kind }, docId, allowed });
+  };
+
+  /**
+   * Retake from the "hard to read" note: back to where the page came from
+   * (camera, photos or files) for one new image that replaces it. It is a
+   * new reading, so it counts like one against the free scans.
+   */
+  const retake = async (docId: number, page: Page) => {
+    if (!isPro && remaining <= 0) return showPaywall('limit');
+    const kind: SourceKind = page.origin === 'photos' || page.origin === 'files' ? page.origin : 'scan';
+    if (kind === 'scan') return setCapture({ start: { kind: 'camera' }, docId, allowed: 1, replacePageId: page.id });
+    const sources = await pick(kind, 1);
+    if (sources && sources.length > 0) setCapture({ start: { kind: 'sources', sources, origin: kind }, docId, allowed: 1, replacePageId: page.id });
   };
 
   const onCaptured = async (res: { docId: number; read: number; empty: number }) => {
@@ -129,7 +145,12 @@ function Shell() {
         />
       )}
       {route.name === 'result' && (
-        <ResultScreen docId={route.docId} onBack={() => setRoute({ name: 'home' })} onAddPage={(kind) => startFrom(kind, route.docId)} />
+        <ResultScreen
+          docId={route.docId}
+          onBack={() => setRoute({ name: 'home' })}
+          onAddPage={(kind) => startFrom(kind, route.docId)}
+          onRetake={(page) => retake(route.docId, page)}
+        />
       )}
       {route.name === 'settings' && <SettingsScreen onBack={() => setRoute({ name: 'home' })} />}
       <Slip theme={theme} text={notice} bottom={route.name === 'result' ? 84 + insets.bottom : insets.bottom} />
@@ -138,6 +159,7 @@ function Shell() {
         start={capture?.start ?? { kind: 'camera' }}
         docId={capture?.docId ?? null}
         allowed={capture?.allowed ?? 0}
+        replacePageId={capture?.replacePageId ?? null}
         onDone={onCaptured}
         onCancel={() => setCapture(null)}
       />
