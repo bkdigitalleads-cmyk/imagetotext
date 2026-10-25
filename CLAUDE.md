@@ -6,7 +6,7 @@ App #11 in Brian's iOS app portfolio (seller bkdigitalleads-cmyk). Expo SDK 57, 
 
 - App Store name: "Image to Text: Handwriting OCR". Subtitle "Text Scanner, Copy & Export". Home screen name: "Image to Text". Bundle ID: com.bwk.imagetotext. Expo slug and scheme: imagetotext. GitHub: bkdigitalleads-cmyk/imagetotext.
 - App Store app ID: 6825592626 (eas.json `ascAppId`). Expo project: bkdeveloper123/imagetotext, projectId a0104a65-0c22-44a1-9ac0-c8dd98f6a5cf (app.json `extra.eas.projectId`). RevenueCat public iOS key in app.json `extra.revenueCatApiKeyIos` (set up by Cowork). The app runs with purchases off if that key is ever missing or does not start with `appl_`.
-- Not in the store yet. Version 1.0.0 build 1 is the first PR.
+- Not in the store yet. Version 1.0.0: build 1 merged (PR #1) and uploaded to TestFlight on Oct 22, 2026; build 2 is the accuracy release (page detection and flattening, a second pass on small or unsure lines, the hard-to-read note).
 - What it is: a utility, one job done fast. A photo of a page, whiteboard, receipt or handwritten note becomes text to copy, clean up and export. Camera, Photos and Files (images and PDFs) in; crop and rotate; Vision reads on the device; Result with Clean up, Copy all, Share, Export (.txt, .pdf, .md), Add page; history on Home. No accounts, no cloud, no network calls for OCR. Everything stays on the device.
 - No brand word anywhere (app, store text, keywords, website): no product names of other companies' OCR or of Apple frameworks in user-facing text.
 
@@ -39,7 +39,7 @@ App #11 in Brian's iOS app portfolio (seller bkdigitalleads-cmyk). Expo SDK 57, 
 
 ## Testing
 
-- Type check: `npx tsc --noEmit`. Unit checks (paragraph grouping, Clean up, the page model, exports, the daily quota, trial and plan rules): `npm test`. Health check: `npx expo-doctor`. Bundle check: `npx expo export --platform ios`.
+- Type check: `npx tsc --noEmit`. Unit checks (paragraph grouping, Clean up, the safe fixes, the page model, exports, the second pass, the nudge, page outlines, the daily quota, trial and plan rules): `npm test`. Health check: `npx expo-doctor`. Bundle check: `npx expo export --platform ios`.
 - The Swift module (modules/vision-ocr/ios) only compiles in Xcode or the EAS build; nothing here can type-check it. Keep changes to it small and read them twice.
 - Simulator (needs Xcode): `npx expo start --ios`. The simulator has no camera; use Photos or Files. Purchases do not complete in the simulator.
 - Real-device check: TestFlight build from the EAS workflow, on Brian's iPhone. Vision accuracy, the camera and haptics can only be judged there.

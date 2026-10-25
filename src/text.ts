@@ -2,6 +2,7 @@
  * Everything the app does to recognized text, as pure functions (no React,
  * no native modules, no runtime imports), so `npm test` can check them:
  *  - Clean up: join broken lines into paragraphs, fix double spaces
+ *  - safe fixes on recognized text (a lone "I" that is a 1, pieced fractions)
  *  - the page model the Result screen draws (tappable words, unsure words)
  *  - word counts, titles, file names, and the .txt and .md exports
  */
@@ -9,8 +10,9 @@ import type { OcrBox, OcrLine } from '../modules/vision-ocr/src/VisionOcr.types'
 
 // ---------- Clean up ----------
 
-/** A list item: "- ", "• ", "* ", "1. ", "2) ", "a) ". Same rule as the paragraph grouping. */
-const LIST_MARKER = /^\s*(?:[-•*·]|\d{1,3}[.)]|[a-zA-Z][.)])\s+\S/;
+/** A list item: dash, bullet, checkbox, or "1." "2)" "a)". Kept identical to LIST_MARKER in the paragraph grouping. */
+export const LIST_MARKER =
+  /^\s*(?:[-\u2013\u2014\u2022*\u00b7\u25aa\u25e6\u25cb\u25a1\u2610\u2611\u2612\u2713\u2714](?:\s+(?=\S)|(?=[\p{L}"'(]))|\[[ xX\u2713]?\]\s*\S|\d{1,3}[.)]\s+\S|[a-zA-Z][.)]\s+\S)/u;
 
 /** A word cut at the end of a line ("infor-") that the next line finishes in lowercase. */
 const HYPHEN_END = /\p{L}-$/u;
@@ -58,6 +60,78 @@ export function cleanText(text: string): string {
       return out.join('\n');
     })
     .join('\n\n');
+}
+
+// ---------- safe fixes on recognized text ----------
+//
+// Applied to every recognized line, raw or cleaned up, never to the person's
+// own edits. Only fixes that cannot change a correct reading: a lone "I" or
+// "l" that stands where a quantity must be, and fractions Vision returns in
+// pieces turned into the single fraction character. Nothing is guessed: a
+// "%" where a fraction might have been stays a "%".
+
+/** Fractions that have their own character. */
+const FRACTIONS: Record<string, string> = {
+  '1/2': '½', '1/3': '⅓', '2/3': '⅔', '1/4': '¼', '3/4': '¾', '1/5': '⅕', '2/5': '⅖', '3/5': '⅗', '4/5': '⅘',
+  '1/6': '⅙', '5/6': '⅚', '1/7': '⅐', '1/8': '⅛', '3/8': '⅜', '5/8': '⅝', '7/8': '⅞', '1/9': '⅑', '1/10': '⅒',
+};
+const FRACTION_GLYPHS = Object.values(FRACTIONS).join('');
+const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+const SUBSCRIPT = '₀₁₂₃₄₅₆₇₈₉';
+
+/** Units written in capitals, the way recipes and labels print them. */
+const CAPS_UNIT = /^(?:CUPS?|TABLESPOONS?|TEASPOONS?|TBSPS?|TSPS?|POUNDS?|LBS?|OUNCES?|OZ|PINTS?|QUARTS?|GALLONS?|GRAMS?|KG|ML|LITERS?|LITRES?|INCH(?:ES)?|CLOVES?)(?![A-Za-z])/;
+/** A fraction on its own: a fraction character, or digits, a slash, digits. */
+const FRACTION_TOKEN = new RegExp(`^(?:[${FRACTION_GLYPHS}]|[0-9]{1,2}/[0-9]{1,2}(?![0-9]))`);
+const PIECED_FRACTION = new RegExp(
+  `(?<![0-9${SUPERSCRIPT}])([0-9${SUPERSCRIPT}]{1,2})\u2044([0-9${SUBSCRIPT}]{1,2})|(?<![0-9${SUPERSCRIPT}])([${SUPERSCRIPT}]{1,2})/([0-9${SUBSCRIPT}]{1,2})`,
+  'g'
+);
+
+const plainDigits = (s: string) =>
+  s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉]/g, (c) => String(SUPERSCRIPT.includes(c) ? SUPERSCRIPT.indexOf(c) : SUBSCRIPT.indexOf(c)));
+
+/**
+ * Fractions Vision returns in pieces ("1⁄2" with a fraction slash, "¹/₂" in
+ * small digits) as one fraction character ("½"), or as plain "n/d" when no
+ * such character exists. A plain "3/4" typed with a slash is left as it is.
+ */
+export function normalizeFractions(s: string): string {
+  return s.replace(PIECED_FRACTION, (_m, a, b, c, d) => {
+    const key = `${plainDigits(a ?? c)}/${plainDigits(b ?? d)}`;
+    return FRACTIONS[key] ?? key;
+  });
+}
+
+/**
+ * One recognized word, fixed where it is safe, given the word after it:
+ *  - a lone "I" or "l" before a unit in capitals ("I TABLESPOON") or before a
+ *    fraction ("I ½ CUPS") is the number 1
+ *  - "I-INCH" and "I½" start with the number 1
+ *  - pieced fractions become one fraction character
+ */
+export function fixToken(token: string, next?: string): string {
+  let t = normalizeFractions(token);
+  if ((t === 'I' || t === 'l') && next != null) {
+    const n = normalizeFractions(next).replace(/^[([]/, '');
+    if (CAPS_UNIT.test(n) || FRACTION_TOKEN.test(n)) t = '1';
+  }
+  return t
+    .replace(/^([([]?)[Il](?=-(?:INCH(?:ES)?|IN)(?![A-Za-z]))/, '$11')
+    .replace(new RegExp(`^([([]?)[Il](?=[${FRACTION_GLYPHS}])`), '$11');
+}
+
+/** A recognized line with the safe fixes, spacing kept exactly. */
+export function fixLine(text: string): string {
+  const tokens = [...text.matchAll(/\S+/g)];
+  if (tokens.length === 0) return text;
+  let out = '';
+  let last = 0;
+  tokens.forEach((m, i) => {
+    out += text.slice(last, m.index) + fixToken(m[0], tokens[i + 1]?.[0]);
+    last = (m.index ?? 0) + m[0].length;
+  });
+  return out + text.slice(last);
 }
 
 // ---------- the page model ----------
@@ -126,24 +200,24 @@ export function buildRuns(paragraphs: OcrLine[][], clean: boolean): Run[] {
     lines.forEach((line, li) => {
       const index = lineIndex++;
       const text = clean ? line.text.replace(/[\t   ]/g, ' ') : line.text;
-      const re = /\S+/g;
-      let m: RegExpExecArray | null;
+      const tokens = [...text.matchAll(/\S+/g)];
       const start = runs.length;
       let lastEnd = 0;
-      while ((m = re.exec(text))) {
-        if (runs.length > start) runs[runs.length - 1].after = clean ? ' ' : text.slice(lastEnd, m.index);
-        const tokenText = m[0];
+      tokens.forEach((m, k) => {
+        const at = m.index ?? 0;
+        if (runs.length > start) runs[runs.length - 1].after = clean ? ' ' : text.slice(lastEnd, at);
+        const tokenText = fixToken(m[0], tokens[k + 1]?.[0]);
         // A lone comma or period gets pulled onto the word before it.
         if (clean && (tokenText === ',' || tokenText === '.') && runs.length > start) runs[runs.length - 1].after = '';
         runs.push({
           text: tokenText,
           after: '',
           line: index,
-          box: tokenBox(line, m.index, m.index + tokenText.length),
-          unsure: isUnsure(tokenText, line),
+          box: tokenBox(line, at, at + m[0].length),
+          unsure: isUnsure(m[0], line),
         });
-        lastEnd = m.index + tokenText.length;
-      }
+        lastEnd = at + m[0].length;
+      });
       if (runs.length === start) return; // a line of nothing but spaces
       const last = runs[runs.length - 1];
       const nextLine = lines[li + 1];
@@ -168,9 +242,9 @@ export function modelText(runs: Run[]): string {
   return runs.map((r) => r.text + r.after).join('');
 }
 
-/** The page as recognized: each line as it was, a blank line between paragraphs. */
+/** The page as recognized (with the safe fixes): each line as it was, a blank line between paragraphs. */
 export function rawText(paragraphs: OcrLine[][]): string {
-  return paragraphs.map((lines) => lines.map((l) => l.text).join('\n')).join('\n\n');
+  return paragraphs.map((lines) => lines.map((l) => fixLine(l.text)).join('\n')).join('\n\n');
 }
 
 // ---------- counts, titles, file names ----------

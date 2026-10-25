@@ -27,6 +27,18 @@ Renders: `after/` holds the screens at 393x852 @3x, light and dark, reduced to 1
 - Onboarding: three value screens (a photo held by an album corner turning into lines of text; a handwritten note and the same words typed, the first highlighted; a phone in airplane mode), then "Try it free for 3 days." with the length typed on a slip, then "We'll remind you the day before it ends." with three days and the second ringed in ink, then the paywall.
 - Settings: Pro status or the Pro band, reading languages as ticks (English always on), keep the original photos, purchases and help, delete every scan.
 
+## Build 2: reading accuracy (Oct 24)
+
+Brian's build 1 test on a glossy cookbook page showed the engine reads well straight on, and badly at an angle and on 6 pt print. Build 2 changes how the page gets to Vision, not how it looks, apart from two places:
+
+- Crop: when the page is found, the title says "Page found" and the crop is the page's own outline, drawn as a paper line with a ring on each corner over the dimmed photo. Drag a ring to fit the edge; the outline cannot be twisted. Rotate turns the outline with the photo; the crop glyph ("Use the whole photo") goes back to the plain rectangle, which is also what shows when no page is found. `after/04-crop` now shows this; `after/05-reading` shows the squared-up page.
+- Result: one slip above a page's text when more than 10% of its words were hard to read: "Some words were hard to read. A closer, flatter photo usually fixes it." with Retake and Dismiss. It uses the toast's materials (ink-dark slip, paper text; cream slip with ink text on dim paper) but sits in the page, not over it, and appears once per page. `after/21-result-hard-to-read`.
+- Camera: the hint is now "Fill the frame with the page, straight on." `after/03-camera`. Autofocus is continuous; tap anywhere on the preview to focus there, shown by a thin paper ring (not the highlighter: it is not the live action) that holds for the 3 seconds focus is held and then fades (no scale with Reduce Motion). A capture that measures blurry gets a paper slip over the preview, "That looks blurry. Hold still and tap the page to focus.", with Retake and Use anyway. `after/22-camera-blurry`.
+- Result note, soft photo version: "Some words were hard to read, and the photo looks out of focus. Hold still and tap the page to focus." `after/21-result-hard-to-read` shows it.
+- Lists: handwritten lists keep one item per line in reading order, each item its own paragraph.
+
+Thresholds live in `src/accuracy.ts`: second pass under 0.6 confidence or under 1.2% of the image height, 2x, at most 40 lines; nudge above 10% unsure words; a found page is used at 0.6 confidence, covering 15% to 97% of the photo; blurry under a sharpness of 100; focus held 3 seconds. The paragraph gap (0.6 median line heights) is in `modules/vision-ocr/src/paragraphs.ts`.
+
 ## Icon
 
 Four options in `icon-options.png`, each big and at 60 px on light and dark wallpaper, drawn by `store/icon.js` (`node icon.js options`; `node icon.js` writes `assets/` and the website images):

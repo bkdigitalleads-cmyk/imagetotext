@@ -6,16 +6,19 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { groupParagraphs, orderLines, recognize, renderPdf, OcrLine } from '../modules/vision-ocr';
-import { addPages, createDoc, getDoc, Page, PageInput, setDocTitle } from './db';
-import { keepPage } from './files';
+import { documentBounds, flatten, groupParagraphs, orderLines, recognize, recognizeRegions, renderPdf, sharpness, OcrLine, Quad } from '../modules/vision-ocr';
+import { addPages, createDoc, getDoc, Page, PageInput, PageOrigin, replacePage, setDocTitle } from './db';
+import { keepPage, removeFiles } from './files';
 import { buildRuns, cleanText, modelText, Run } from './text';
+import { clampQuad, mergeSecondPass, orderQuad, pickSecondPass, SECOND_PASS_SCALE, unturnQuad, usablePage } from './accuracy';
 
 /** An image ready to crop and read: a local file and its pixel size. */
 export interface Source {
   uri: string;
   width: number;
   height: number;
+  /** A page drawn from a PDF: already flat, so no page detection. */
+  pdf?: boolean;
 }
 
 // ---------- picking ----------
@@ -58,7 +61,7 @@ export async function pickFiles(limit: number): Promise<{ sources: Source[]; ski
         continue;
       }
       const pdf = await renderPdf(a.uri, { maxPages: Number.isFinite(room) ? room : 200 });
-      sources.push(...pdf.pages);
+      sources.push(...pdf.pages.map((pg) => ({ ...pg, pdf: true })));
       skipped += Math.max(0, pdf.pageCount - pdf.pages.length);
     } else if (room > 0) {
       sources.push(await measure(a.uri));
@@ -85,6 +88,29 @@ export interface Crop {
   y: number;
   width: number;
   height: number;
+  /**
+   * The page's own outline, in pixels of the turned image, when one was
+   * found (or the person dragged its corners). It wins over the rectangle:
+   * the page is cut out along it and squared up before reading.
+   */
+  quad?: Quad | null;
+}
+
+/**
+ * The page in a photo, when Vision finds one it is confident about, as an
+ * outline on the unturned photo. Null for PDF pages and when nothing usable
+ * is found (then the plain rectangle crop stays).
+ */
+export async function detectPage(src: Source): Promise<Quad | null> {
+  if (src.pdf) return null;
+  const found = await documentBounds(src.uri);
+  if (!found.quad || !found.width || !found.height) return null;
+  // The corners are in the pixels Vision saw; bring them to the size we know.
+  const sx = src.width / found.width;
+  const sy = src.height / found.height;
+  const quad = orderQuad(found.quad.map((p) => ({ x: p.x * sx, y: p.y * sy })));
+  if (!usablePage({ ...found, quad }, src)) return null;
+  return clampQuad(quad, src);
 }
 
 /** The size of an image after `turns` quarter turns. */
@@ -92,9 +118,20 @@ export function turnedSize(s: { width: number; height: number }, turns: number) 
   return turns % 2 ? { width: s.height, height: s.width } : { width: s.width, height: s.height };
 }
 
-/** Applies the crop and rotation at full resolution. No change means no new file. */
+/**
+ * Applies the crop and rotation at full resolution. With a page outline the
+ * page is cut out along it and squared up (perspective correction), then
+ * turned. No change means no new file.
+ */
 export async function applyCrop(src: Source, crop: Crop | null): Promise<Source> {
   if (!crop) return src;
+  if (crop.quad) {
+    const flat = await flatten(src.uri, unturnQuad(crop.quad, src, crop.turns));
+    if (crop.turns % 4 === 0) return flat;
+    const turned = await ImageManipulator.manipulate(flat.uri).rotate((crop.turns % 4) * 90).renderAsync();
+    const saved = await turned.saveAsync({ compress: 0.95, format: SaveFormat.JPEG });
+    return { uri: saved.uri, width: saved.width, height: saved.height };
+  }
   const size = turnedSize(src, crop.turns);
   const full = crop.x <= 0 && crop.y <= 0 && crop.width >= size.width && crop.height >= size.height;
   if (crop.turns % 4 === 0 && full) return src;
@@ -124,28 +161,76 @@ export interface ReadResult {
 }
 
 /**
- * Reads each image with Vision and saves it as a page, into `docId` or a
- * new document. Pages with no text are still saved (so the order holds),
- * but only pages with text count as recognitions.
+ * One page read: Vision on the whole (flattened) image, then a second, closer
+ * look at the lines it was unsure of or that are small print (enlarged crops,
+ * read again all at once). A second reading replaces a line only when it is
+ * more confident. The added time is logged.
+ */
+async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrLine[]; width: number; height: number }> {
+  const first = await recognize(src.uri, { languages, autoDetectLanguage: true, languageCorrection: true });
+  const width = first.width || src.width;
+  const height = first.height || src.height;
+  let lines = first.lines;
+  const picks = pickSecondPass(lines);
+  if (picks.length > 0) {
+    const started = Date.now();
+    try {
+      const again = await recognizeRegions(
+        src.uri,
+        picks.map((i) => lines[i].box),
+        { languages, autoDetectLanguage: true, languageCorrection: true, scale: SECOND_PASS_SCALE }
+      );
+      const merged = mergeSecondPass(lines, again.results.map((r, k) => ({ index: picks[k], ...r })));
+      const replaced = merged.filter((l, i) => l !== lines[i]).length;
+      lines = merged;
+      console.log(
+        `[ocr] second pass: ${picks.length} of ${first.lines.length} lines, ${replaced} replaced, ` +
+          `${Date.now() - started} ms (native ${Math.round(again.elapsedMs)} ms)`
+      );
+    } catch {
+      // the first reading stands
+    }
+  }
+  return { lines: orderLines(lines, width, height), width, height };
+}
+
+/**
+ * Reads each image and saves it as a page, into `docId` or a new document.
+ * Pages with no text are still saved (so the order holds), but only pages
+ * with text count as recognitions. With `replacePageId` (Retake) the first
+ * image takes that page's place instead.
  */
 export async function readIntoDoc(
   sources: Source[],
-  opts: { docId: number | null; languages: string[]; keepOriginals: boolean; onPage?: (done: number) => void }
+  opts: {
+    docId: number | null;
+    languages: string[];
+    keepOriginals: boolean;
+    origin: PageOrigin;
+    replacePageId?: number | null;
+    onPage?: (done: number) => void;
+  }
 ): Promise<ReadResult> {
   const pages: PageInput[] = [];
   let read = 0;
   let empty = 0;
-  for (const [i, src] of sources.entries()) {
-    const res = await recognize(src.uri, { languages: opts.languages, autoDetectLanguage: true, languageCorrection: true });
-    const lines = orderLines(res.lines, res.width || src.width, res.height || src.height);
+  const list = opts.replacePageId != null ? sources.slice(0, 1) : sources;
+  for (const [i, src] of list.entries()) {
+    const sharp = await sharpness(src.uri);
+    const page = await readPage(src, opts.languages);
     const files = await keepPage(src.uri, opts.keepOriginals);
-    pages.push({ ...files, width: res.width || src.width, height: res.height || src.height, lines });
-    if (lines.length > 0) read++;
+    pages.push({ ...files, ...page, origin: opts.origin, sharpness: sharp });
+    if (page.lines.length > 0) read++;
     else empty++;
     opts.onPage?.(i + 1);
   }
-  const docId = opts.docId ?? (await createDoc());
-  await addPages(docId, pages);
+  let docId = opts.docId;
+  if (opts.replacePageId != null && docId != null && pages[0]) {
+    removeFiles(await replacePage(opts.replacePageId, pages[0]));
+  } else {
+    docId = docId ?? (await createDoc());
+    await addPages(docId, pages);
+  }
   const doc = await getDoc(docId);
   if (doc) await setDocTitle(docId, docText(doc.pages, doc.cleanUp));
   return { docId, read, empty };

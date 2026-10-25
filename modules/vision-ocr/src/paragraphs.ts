@@ -4,6 +4,13 @@
  * geometry: the vertical gap between lines, the left edge, a first-line
  * indent, a short last line, a change in letter height, a list marker.
  *
+ * Coordinates: every box here is top-left origin (y grows down the page).
+ * Vision's own boxes are bottom-left origin; the Swift module flips them
+ * (y = 1 - y - height, see `flipVisionBox`) before they reach JavaScript,
+ * for line boxes, word boxes and second-pass words alike. Vision's result
+ * order is not reading order (handwriting can come back bottom to top), so
+ * `orderLines` always sorts.
+ *
  * Pure TypeScript with no imports at runtime, so the unit checks can load it
  * straight from Node. Boxes are fractions of the image; pass the image size
  * so x and y distances are compared in the same units (pixels).
@@ -30,8 +37,25 @@ const px = (b: OcrBox, w: number, h: number): Px => ({
   height: b.height * h,
 });
 
-/** A list item: "- ", "• ", "* ", "1. ", "2) ", "a) ". */
-export const LIST_MARKER = /^\s*(?:[-•*·]|\d{1,3}[.)]|[a-zA-Z][.)])\s+\S/;
+/**
+ * A list item: a dash or bullet ("- ", "-Eggs", "\u2013 ", "\u2022 ", "* "), a
+ * checkbox ("[ ] ", "[x] ", "\u2610 "), or a number or letter with "." or ")"
+ * and a space ("1. ", "2) ", "a) "). Kept identical to LIST_MARKER in src/text.ts.
+ */
+export const LIST_MARKER =
+  /^\s*(?:[-\u2013\u2014\u2022*\u00b7\u25aa\u25e6\u25cb\u25a1\u2610\u2611\u2612\u2713\u2714](?:\s+(?=\S)|(?=[\p{L}"'(]))|\[[ xX\u2713]?\]\s*\S|\d{1,3}[.)]\s+\S|[a-zA-Z][.)]\s+\S)/u;
+
+/** Two lines are one paragraph only when the gap between them is under this many median line heights. */
+export const PARAGRAPH_GAP = 0.6;
+
+/**
+ * Vision's box (fractions, origin bottom left) as the top-left box used
+ * everywhere in the app. The Swift module does exactly this; it is here so
+ * the unit checks can feed Vision-style fixtures through the same math.
+ */
+export function flipVisionBox(b: OcrBox): OcrBox {
+  return { x: b.x, y: 1 - b.y - b.height, width: b.width, height: b.height };
+}
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -40,10 +64,20 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+const overlapY = (a: Px, b: Px) => Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+const overlapX = (a: Px, b: Px) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+
+/**
+ * Two boxes on one row: they share at least half their height, or they sit
+ * side by side with a small gap and share a fifth of it (the two halves of
+ * a line written on a slant).
+ */
 function sameRow(a: Px, b: Px): boolean {
-  const ca = (a.top + a.bottom) / 2;
-  const cb = (b.top + b.bottom) / 2;
-  return Math.abs(ca - cb) < 0.5 * Math.min(a.height, b.height);
+  const minH = Math.min(a.height, b.height);
+  const oy = overlapY(a, b);
+  if (oy >= 0.5 * minH) return true;
+  const gap = Math.max(a.left, b.left) - Math.min(a.right, b.right);
+  return overlapX(a, b) === 0 && gap < 1.5 * minH && oy >= 0.2 * minH;
 }
 
 function union(a: OcrBox, b: OcrBox): OcrBox {
@@ -71,39 +105,76 @@ function joinLine(a: OcrLine, b: OcrLine): OcrLine {
 }
 
 /**
- * Keeps Vision's order (it already handles columns), with two local fixes:
- * pieces of the same row come left to right, and a row Vision split in two
- * across a small gap becomes one line again.
+ * A gutter between two columns of text, as an x position in pixels, or
+ * null. A column split needs at least two lines on each side, side by side
+ * on the page, and must not be a table: when most lines on the right sit on
+ * the same row as a line on the left (a receipt's prices), it is rows, not columns.
+ */
+function findGutter(boxes: Px[], h: number): number | null {
+  if (boxes.length < 4) return null;
+  const spans = boxes.map((b) => [b.left, b.right]).sort((a, b) => a[0] - b[0]);
+  let best: { at: number; width: number } | null = null;
+  let reach = spans[0][1];
+  for (let i = 1; i < spans.length; i++) {
+    const [l, r] = spans[i];
+    if (l - reach >= h && (!best || l - reach > best.width)) best = { at: (l + reach) / 2, width: l - reach };
+    reach = Math.max(reach, r);
+  }
+  if (!best) return null;
+  const at = best.at;
+  const left = boxes.filter((b) => b.right <= at);
+  const right = boxes.filter((b) => b.left >= at);
+  if (left.length < 2 || right.length < 2) return null;
+  const band = (list: Px[]) => [Math.min(...list.map((b) => b.top)), Math.max(...list.map((b) => b.bottom))];
+  const [lt, lb] = band(left);
+  const [rt, rb] = band(right);
+  if (Math.min(lb, rb) - Math.max(lt, rt) < 0.5 * Math.min(lb - lt, rb - rt)) return null;
+  const aligned = right.filter((r) => left.some((l) => overlapY(l, r) >= 0.5 * Math.min(l.height, r.height))).length;
+  return aligned / right.length >= 0.6 ? null : at;
+}
+
+/** Lines sorted top to bottom into rows, each row left to right. */
+function rowsInOrder(items: { line: OcrLine; px: Px }[]): { line: OcrLine; px: Px }[] {
+  const sorted = [...items].sort((a, b) => a.px.top - b.px.top || a.px.left - b.px.left);
+  const rows: { line: OcrLine; px: Px }[][] = [];
+  for (const it of sorted) {
+    const row = rows[rows.length - 1];
+    if (row && row.some((r) => sameRow(r.px, it.px))) row.push(it);
+    else rows.push([it]);
+  }
+  return rows.flatMap((row) => row.sort((a, b) => a.px.left - b.px.left));
+}
+
+/**
+ * Reading order, whatever order Vision returned: top to bottom, and left
+ * to right within a row. Two columns of running text are read one column
+ * after the other. Pieces of one row with a gap smaller than about one and
+ * a half letters tall (Vision splits slanted or spaced-out lines) become one line.
  */
 export function orderLines(lines: OcrLine[], width = 1, height = 1): OcrLine[] {
-  const out = [...lines];
-  // Left to right within a row: swap neighbors that are on one row but backwards.
-  for (let pass = 0; pass < out.length; pass++) {
-    let swapped = false;
-    for (let i = 0; i + 1 < out.length; i++) {
-      const a = px(out[i].box, width, height);
-      const b = px(out[i + 1].box, width, height);
-      if (sameRow(a, b) && b.left < a.left) {
-        [out[i], out[i + 1]] = [out[i + 1], out[i]];
-        swapped = true;
-      }
-    }
-    if (!swapped) break;
-  }
-  // Pieces of one row with a gap smaller than about two letters tall become one line.
+  const items = lines.map((line) => ({ line, px: px(line.box, width, height) }));
+  if (items.length === 0) return [];
+  const h = median(items.map((i) => i.px.height)) || 1;
+  const gutter = findGutter(items.map((i) => i.px), h);
+  const ordered =
+    gutter == null
+      ? rowsInOrder(items)
+      : [...rowsInOrder(items.filter((i) => i.px.left < gutter)), ...rowsInOrder(items.filter((i) => i.px.left >= gutter))];
+
   const merged: OcrLine[] = [];
-  for (const line of out) {
+  let prevPx: Px | null = null;
+  for (const { line, px: b } of ordered) {
     const prev = merged[merged.length - 1];
-    if (prev) {
-      const a = px(prev.box, width, height);
-      const b = px(line.box, width, height);
-      const gap = b.left - a.right;
-      if (sameRow(a, b) && gap >= -0.2 * a.height && gap < 1.5 * Math.min(a.height, b.height)) {
+    if (prev && prevPx) {
+      const gap = b.left - prevPx.right;
+      if (sameRow(prevPx, b) && gap >= -0.2 * prevPx.height && gap < 1.5 * Math.min(prevPx.height, b.height)) {
         merged[merged.length - 1] = joinLine(prev, line);
+        prevPx = px(merged[merged.length - 1].box, width, height);
         continue;
       }
     }
     merged.push(line);
+    prevPx = b;
   }
   return merged;
 }
@@ -129,7 +200,7 @@ export function groupParagraphs(lines: OcrLine[], width = 1, height = 1): Paragr
     const firstLineIndent = current.length === 1 && a.left - b.left > 0.8 * h && a.left - b.left < 5 * h;
 
     const breakHere =
-      gap > 0.85 * h || // a blank line's worth of space
+      gap >= PARAGRAPH_GAP * h || // more space than lines of one paragraph have (relative to this page's writing)
       b.top < a.top - 0.5 * h || // went back up: another column or block
       ratio > 1.45 || // a heading and its text
       LIST_MARKER.test(lines[i].text) || // a new list item
