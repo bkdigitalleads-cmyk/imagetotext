@@ -4,6 +4,7 @@ import { initPurchases, getIsPro, checkPro, onProChange } from './purchases';
 import { kvAll, kvGet, kvSet } from './db';
 import { syncTrialReminder } from './reminder';
 import { consume, dayKey, parseQuota, QuotaRecord, remainingToday } from './quota';
+import { isTestBuild } from '../modules/vision-ocr';
 
 export interface Settings {
   /** Reading languages, most likely first (BCP 47). en-US is always read as well. */
@@ -20,6 +21,14 @@ export const DEFAULT_SETTINGS: Settings = {
 const SETTING_PREFIX = 'setting.';
 export const ONBOARDED_KEY = 'flag.onboarded';
 const QUOTA_KEY = 'quota.daily';
+/** Test builds only: Pro is ignored on this phone while this is on. */
+const ACT_FREE_KEY = 'test.actFree';
+/**
+ * A TestFlight or development build. The hidden test tools in Settings, and
+ * the "act as a free user" override, exist only here: the App Store build
+ * never shows them and ignores any stored override.
+ */
+export const TEST_BUILD = __DEV__ || isTestBuild();
 
 /** Settings from their stored rows, with defaults for anything missing or unreadable. */
 export function parseSettings(rows: Record<string, string>): Settings {
@@ -48,6 +57,12 @@ interface AppState {
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
   isPro: boolean;
   setIsPro: (v: boolean) => void;
+  /** Test builds only (see TEST_BUILD). */
+  testBuild: boolean;
+  actFree: boolean;
+  setActFree: (v: boolean) => Promise<void>;
+  /** Test builds only: today's free scans back to the full count. */
+  resetQuota: () => Promise<void>;
   paywall: PaywallReason | null;
   showPaywall: (reason: PaywallReason) => void;
   hidePaywall: () => void;
@@ -69,7 +84,9 @@ const Ctx = createContext<AppState | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const settingsRef = useRef(settings);
-  const [isPro, setIsPro] = useState(false);
+  // What the store says; isPro below is this unless a test build is acting as a free user.
+  const [storePro, setIsPro] = useState(false);
+  const [actFree, setActFreeState] = useState(false);
   const [paywall, setPaywall] = useState<PaywallReason | null>(null);
   const [quota, setQuota] = useState<QuotaRecord>({ day: '', used: 0 });
   const quotaRef = useRef(quota);
@@ -93,6 +110,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const q = parseQuota(await kvGet(QUOTA_KEY));
         quotaRef.current = q;
         setQuota(q);
+        if (TEST_BUILD) setActFreeState((await kvGet(ACT_FREE_KEY)) === '1');
       } catch {
         // unreadable storage -> defaults
       }
@@ -151,6 +169,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await kvSet(QUOTA_KEY, JSON.stringify(next)).catch(() => {});
   }, []);
 
+  const setActFree = useCallback(async (v: boolean) => {
+    if (!TEST_BUILD) return;
+    setActFreeState(v);
+    await kvSet(ACT_FREE_KEY, v ? '1' : '0').catch(() => {});
+  }, []);
+
+  const resetQuota = useCallback(async () => {
+    if (!TEST_BUILD) return;
+    const fresh: QuotaRecord = { day: '', used: 0 };
+    quotaRef.current = fresh;
+    setQuota(fresh);
+    setToday(dayKey(Date.now()));
+    await kvSet(QUOTA_KEY, JSON.stringify(fresh)).catch(() => {});
+  }, []);
+
+  const isPro = storePro && !(TEST_BUILD && actFree);
   const remaining = remainingToday(quota, today, isPro);
 
   const value = useMemo<AppState>(
@@ -159,6 +193,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateSettings,
       isPro,
       setIsPro,
+      testBuild: TEST_BUILD,
+      actFree: TEST_BUILD && actFree,
+      setActFree,
+      resetQuota,
       paywall,
       showPaywall: (reason) => setPaywall(reason),
       hidePaywall: () => setPaywall(null),
@@ -170,7 +208,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       notice,
       say,
     }),
-    [settings, updateSettings, isPro, paywall, remaining, spendRecognitions, ready, dataVersion, notice, say]
+    [settings, updateSettings, isPro, actFree, setActFree, resetQuota, paywall, remaining, spendRecognitions, ready, dataVersion, notice, say]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

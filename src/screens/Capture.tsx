@@ -5,8 +5,8 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { darkTheme, fonts, lightTheme, radius, tabular } from '../theme';
 import { useApp } from '../state';
-import { applyCrop, Crop, detectPage, readIntoDoc, ReadResult, Source, turnedSize } from '../ocr';
-import { BLUR_THRESHOLD, FOCUS_HOLD_SECONDS, focusPoint, isBlurry, isConvex, quadBounds, turnQuad } from '../accuracy';
+import { applyCrop, Crop, detectPage, PageFind, readIntoDoc, ReadResult, Source, turnedSize } from '../ocr';
+import { BLUR_THRESHOLD, FOCUS_HOLD_SECONDS, focusPoint, guessQuad, isBlurry, isConvex, quadBounds, turnQuad } from '../accuracy';
 import { focusAt, sharpness } from '../../modules/vision-ocr';
 import type { Quad } from '../../modules/vision-ocr';
 import { captureHaptic, useReduceMotion } from '../ui/motion';
@@ -38,6 +38,10 @@ interface Item {
   crop: Crop;
   /** The person changed the crop, so a late page detection must not overwrite it. */
   touched?: boolean;
+  /** Vision found the page and the crop follows its outline. */
+  found?: boolean;
+  /** No page was found: the corner handles start on a guess for the person to drag. */
+  guess?: boolean;
 }
 
 /** A crop that follows a found page outline (on the unturned photo). */
@@ -74,14 +78,27 @@ export default function CaptureFlow({
   const [done, setDone] = useState(0);
   const [prepared, setPrepared] = useState<Source[]>([]);
 
-  /** Looks for the page in a photo and, if found and the crop is untouched, starts the crop on it. */
+  /**
+   * Looks for the page in a photo. While the crop is untouched: a found page
+   * starts the crop on its outline; when none is found, corner handles start
+   * on the camera's guide (or 6% in from each edge) for the person to drag.
+   * A photo that is all page already (a screenshot, a scan, a PDF page) keeps
+   * the whole image.
+   */
   const detect = (src: Source) => {
+    const settle = (find: PageFind) =>
+      setItems((list) =>
+        list.map((it) => {
+          if (it.src.uri !== src.uri || it.touched) return it;
+          if (find.kind === 'page') return { ...it, crop: pageCrop(find.quad), found: true, guess: false };
+          if (find.kind === 'whole') return it;
+          const guide = it.crop.x > 0 || it.crop.y > 0 || it.crop.width < src.width || it.crop.height < src.height ? it.crop : undefined;
+          return { ...it, crop: pageCrop(guessQuad(src, guide)), found: false, guess: true };
+        })
+      );
     detectPage(src)
-      .then((quad) => {
-        if (!quad) return;
-        setItems((list) => list.map((it) => (it.src.uri === src.uri && !it.touched ? { ...it, crop: pageCrop(quad) } : it)));
-      })
-      .catch(() => {});
+      .then(settle)
+      .catch(() => settle({ kind: 'none' }));
   };
 
   useEffect(() => {
@@ -107,7 +124,11 @@ export default function CaptureFlow({
     setPrepared([]);
     try {
       const ready: Source[] = [];
-      for (const it of list) ready.push(await applyCrop(it.src, it.crop));
+      for (const it of list) {
+        // A found page or a crop the person set (not the whole photo) leaves no scraps of a facing page to drop.
+        const whole = !it.crop.quad && it.crop.turns % 4 === 0 && it.crop.x <= 0 && it.crop.y <= 0 && it.crop.width >= it.src.width && it.crop.height >= it.src.height;
+        ready.push(await applyCrop(it.src, it.crop, !whole && (it.found === true || it.touched === true)));
+      }
       setPrepared(ready);
       const res = await readIntoDoc(ready, {
         docId,
@@ -146,7 +167,7 @@ export default function CaptureFlow({
             key={`${index}-${current.src.uri}`}
             item={current}
             position={{ index, total: items.length }}
-            onChange={(crop) => setItems((list) => list.map((it, i) => (i === index ? { ...it, crop, touched: true } : it)))}
+            onChange={(crop) => setItems((list) => list.map((it, i) => (i === index ? { ...it, crop, touched: true, guess: it.guess === true && crop.quad != null } : it)))}
             onCancel={onCancel}
             primary={
               index < items.length - 1
@@ -308,7 +329,7 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
         </View>
       )}
       <View style={[styles.cameraBar, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
-        <GlyphButton theme={room} glyph="close" label="Close the camera" onPress={onClose} color={PAPER} size={52} />
+        <GlyphButton theme={room} glyph="close" label="Close" onPress={onClose} color={PAPER} size={52} />
         <Tap onPress={shoot} disabled={busy} accessibilityRole="button" accessibilityLabel="Take the photo" style={styles.shutterRing} pressedStyle={{ transform: [{ scale: 0.94 }] }}>
           <View style={[styles.shutter, { backgroundColor: room.highlight }]}>{busy && <ActivityIndicator color={lightTheme.onHighlight} />}</View>
         </Tap>
@@ -465,14 +486,19 @@ function CropStep({
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.cropTop}>
         <WordButton theme={room} label="Cancel" onPress={onCancel} color={PAPER} />
-        <Text style={[styles.cropTitle, tabular]} maxFontSizeMultiplier={1.3}>
-          {position.total > 1 ? `Page ${position.index + 1} of ${position.total}` : crop.quad ? 'Page found' : 'Crop'}
+        <Text style={[styles.cropTitle, tabular]} maxFontSizeMultiplier={1.3} numberOfLines={2}>
+          {position.total > 1 ? `Page ${position.index + 1} of ${position.total}` : item.guess ? 'Drag the corners\nto the page' : crop.quad ? 'Page found' : 'Crop'}
         </Text>
         <View style={styles.cropTools}>
           {!untouched && <GlyphButton theme={room} glyph="crop" label="Use the whole photo" onPress={() => onChange(fullCrop(src, 0))} color={PAPER} />}
           <GlyphButton theme={room} glyph="rotate" label="Rotate a quarter turn" onPress={rotate} color={PAPER} />
         </View>
       </View>
+      {position.total > 1 && item.guess && (
+        <Text style={styles.cropHint} maxFontSizeMultiplier={1.3}>
+          Drag the corners to the page
+        </Text>
+      )}
 
       <View
         style={{ flex: 1 }}
@@ -480,7 +506,9 @@ function CropStep({
         {...pan.panHandlers}
         accessible
         accessibilityLabel={
-          crop.quad
+          item.guess
+            ? 'No page edge was found. Drag each corner to a corner of the page.'
+            : crop.quad
             ? 'The page was found. Drag a corner to fit the edge of the page.'
             : 'Crop area. Drag a corner to crop, or drag inside to move it.'
         }
@@ -590,7 +618,8 @@ const styles = StyleSheet.create({
   shutterRing: { width: 84, height: 84, borderRadius: 42, borderWidth: 3, borderColor: PAPER, alignItems: 'center', justifyContent: 'center' },
   shutter: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center' },
   cropTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, minHeight: 52 },
-  cropTitle: { color: PAPER, fontFamily: fonts.heading, fontSize: 19 },
+  cropTitle: { color: PAPER, fontFamily: fonts.heading, fontSize: 19, lineHeight: 23, flexShrink: 1, textAlign: 'center', paddingHorizontal: 6 },
+  cropHint: { color: PAPER_SOFT, fontSize: 15, textAlign: 'center', paddingHorizontal: 16, paddingBottom: 6 },
   cropTools: { flexDirection: 'row', gap: 4, minWidth: 60, justifyContent: 'flex-end' },
   shadeCrop: { position: 'absolute', backgroundColor: 'rgba(10, 9, 8, 0.6)' },
   cropFrame: { position: 'absolute', borderWidth: 1, borderColor: PAPER_SOFT },

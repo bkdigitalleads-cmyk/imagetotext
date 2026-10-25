@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, fonts } from '../theme';
@@ -53,8 +53,17 @@ const FALLBACK_LANGUAGES = ['en-US', 'fr-FR', 'it-IT', 'de-DE', 'es-ES', 'pt-BR'
 export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { settings, updateSettings, isPro, setIsPro, showPaywall, bumpData } = useApp();
+  const { settings, updateSettings, isPro, setIsPro, showPaywall, bumpData, testBuild, actFree, setActFree, resetQuota, say } = useApp();
   const [busy, setBusy] = useState(false);
+  // Test builds only: seven taps on the version line open the Testing tools.
+  const [testing, setTesting] = useState(false);
+  const taps = useRef<{ count: number; at: number }>({ count: 0, at: 0 });
+  const onVersionTap = () => {
+    if (!testBuild) return;
+    const now = Date.now();
+    taps.current = { count: now - taps.current.at < 1500 ? taps.current.count + 1 : 1, at: now };
+    if (taps.current.count >= 7) setTesting(true);
+  };
   const [available, setAvailable] = useState<string[]>(FALLBACK_LANGUAGES);
 
   useEffect(() => {
@@ -158,7 +167,29 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
           <Row theme={theme} label="Delete every scan" danger onPress={onDeleteAll} />
         </Group>
 
-        <Text style={[styles.version, { color: theme.inkFaint }]}>Image to Text {Constants.expoConfig?.version ?? ''}. Made in NYC.</Text>
+        {testBuild && (testing || actFree) && (
+          <Group theme={theme} title="Testing" note="Only in test builds. The App Store version never shows this.">
+            <SwitchRow
+              theme={theme}
+              label="Act as a free user"
+              sub="Pro is ignored on this phone until this is off."
+              value={actFree}
+              onChange={(v) => setActFree(v)}
+            />
+            <Row
+              theme={theme}
+              label="Reset today's free scans"
+              onPress={async () => {
+                await resetQuota();
+                say("Today's free scans are back.");
+              }}
+            />
+          </Group>
+        )}
+
+        <Text style={[styles.version, { color: theme.inkFaint }]} onPress={onVersionTap} suppressHighlighting>
+          Image to Text {Constants.expoConfig?.version ?? ''}. Made in NYC.
+        </Text>
       </ScrollView>
     </View>
   );

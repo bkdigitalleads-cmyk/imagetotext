@@ -8,7 +8,7 @@ import { removeFiles, scanUri } from '../files';
 import { FREE_DAILY_RECOGNITIONS } from '../quota';
 import Glyph, { GlyphName } from '../ui/Glyph';
 import { GhostLeaf, Leaf } from '../ui/Paper';
-import { GlyphButton, Tap } from '../ui/Tap';
+import { Tap } from '../ui/Tap';
 import type { SourceKind } from '../../App';
 
 /**
@@ -55,7 +55,18 @@ export default function HomeScreen({
         <Text style={[styles.name, { color: theme.ink }]} accessibilityRole="header" maxFontSizeMultiplier={1.4}>
           Image to Text
         </Text>
-        <GlyphButton theme={theme} glyph="settings" label="Settings" onPress={onSettings} />
+        <Tap
+          onPress={onSettings}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          style={styles.settings}
+          pressedStyle={{ backgroundColor: theme.sunk }}
+        >
+          <Glyph name="settings" size={22} color={theme.ink} />
+          <Text style={[styles.settingsLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+            Settings
+          </Text>
+        </Tap>
       </View>
 
       <Tap
@@ -177,7 +188,9 @@ function HistoryRow({ theme, doc, onPress, onLongPress }: { theme: Theme; doc: D
 
 const styles = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 20, paddingRight: 10, paddingTop: 10 },
-  name: { fontFamily: fonts.display, fontSize: 30, lineHeight: 38 },
+  name: { fontFamily: fonts.display, fontSize: 30, lineHeight: 38, flexShrink: 1 },
+  settings: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingHorizontal: 10, borderRadius: radius.pill },
+  settingsLabel: { fontSize: 17, fontWeight: fonts.weight.medium },
   scan: {
     marginHorizontal: 16,
     marginTop: 14,

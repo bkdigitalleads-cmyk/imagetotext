@@ -39,6 +39,17 @@ Brian's build 1 test on a glossy cookbook page showed the engine reads well stra
 
 Thresholds live in `src/accuracy.ts`: second pass under 0.6 confidence or under 1.2% of the image height, 2x, at most 40 lines; nudge above 10% unsure words; a found page is used at 0.6 confidence, covering 15% to 97% of the photo; blurry under a sharpness of 100; focus held 3 seconds. The paragraph gap (0.6 median line heights) is in `modules/vision-ocr/src/paragraphs.ts`.
 
+## Build 3: reading order, Clean up, small fixes (Oct 25)
+
+From Brian's test of build 2 on a magazine spread, an angled cookbook page, a handwritten trip-up sheet and a slanted note. Mostly reading logic; four visible changes:
+
+- Crop, no page found: the corner handles still show, on the camera's page guide (or 6% in from each edge for a photo or file), and the title says "Drag the corners" over "to the page" (two lines, set on purpose so it never breaks after "the"). With several pages the title stays "Page 1 of 3" and the same words sit in a quieter line under the bar. A found page still says "Page found"; a photo that is all page already (a screenshot, a scan, a PDF page) keeps the whole image. `after/23-crop-no-page`.
+- Home: the sliders glyph now has the word "Settings" next to it, ink on paper, a 44 pt tall target. `after/01-home-empty`, `after/02-home`.
+- Camera: the close button keeps its X; VoiceOver says "Close".
+- Settings, test builds only: seven quick taps on the version line open a "Testing" group under "Start over" with "Act as a free user" (a switch; Pro is ignored on this phone until it is off) and "Reset today's free scans". It uses the ordinary rows, no new styling, and never appears in the App Store build. `after/24-settings-testing`.
+
+The hard-to-read note looks the same; what changed is when it shows (see `src/accuracy.ts`).
+
 ## Icon
 
 Four options in `icon-options.png`, each big and at 60 px on light and dark wallpaper, drawn by `store/icon.js` (`node icon.js options`; `node icon.js` writes `assets/` and the website images):

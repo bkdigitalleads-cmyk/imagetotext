@@ -6,11 +6,11 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { documentBounds, flatten, groupParagraphs, orderLines, recognize, recognizeRegions, renderPdf, sharpness, OcrLine, Quad } from '../modules/vision-ocr';
+import { documentBounds, flatten, groupParagraphs, readingOrder, recognize, recognizeRegions, renderPdf, sharpness, unknownWords, OcrLine, Quad } from '../modules/vision-ocr';
 import { addPages, createDoc, getDoc, Page, PageInput, PageOrigin, replacePage, setDocTitle } from './db';
 import { keepPage, removeFiles } from './files';
 import { buildRuns, cleanText, modelText, Run } from './text';
-import { clampQuad, mergeSecondPass, orderQuad, pickSecondPass, SECOND_PASS_SCALE, unturnQuad, usablePage } from './accuracy';
+import { clampQuad, mergeSecondPass, nudgeCounts, orderQuad, pickSecondPass, SECOND_PASS_SCALE, shouldNudge, unturnQuad, usablePage, wholePhoto } from './accuracy';
 
 /** An image ready to crop and read: a local file and its pixel size. */
 export interface Source {
@@ -19,6 +19,11 @@ export interface Source {
   height: number;
   /** A page drawn from a PDF: already flat, so no page detection. */
   pdf?: boolean;
+  /**
+   * A crop was set: a found page, or one the person adjusted. Without one,
+   * scraps of a facing page at the photo's edges are dropped.
+   */
+  cropped?: boolean;
 }
 
 // ---------- picking ----------
@@ -96,21 +101,24 @@ export interface Crop {
   quad?: Quad | null;
 }
 
+/** What page detection found: a page outline, the whole photo already (a screenshot, a scan), or nothing usable. */
+export type PageFind = { kind: 'page'; quad: Quad } | { kind: 'whole' } | { kind: 'none' };
+
 /**
  * The page in a photo, when Vision finds one it is confident about, as an
- * outline on the unturned photo. Null for PDF pages and when nothing usable
- * is found (then the plain rectangle crop stays).
+ * outline on the unturned photo. PDF pages are whole already.
  */
-export async function detectPage(src: Source): Promise<Quad | null> {
-  if (src.pdf) return null;
+export async function detectPage(src: Source): Promise<PageFind> {
+  if (src.pdf) return { kind: 'whole' };
   const found = await documentBounds(src.uri);
-  if (!found.quad || !found.width || !found.height) return null;
+  if (!found.quad || !found.width || !found.height) return { kind: 'none' };
   // The corners are in the pixels Vision saw; bring them to the size we know.
   const sx = src.width / found.width;
   const sy = src.height / found.height;
   const quad = orderQuad(found.quad.map((p) => ({ x: p.x * sx, y: p.y * sy })));
-  if (!usablePage({ ...found, quad }, src)) return null;
-  return clampQuad(quad, src);
+  if (wholePhoto({ ...found, quad }, src)) return { kind: 'whole' };
+  if (!usablePage({ ...found, quad }, src)) return { kind: 'none' };
+  return { kind: 'page', quad: clampQuad(quad, src) };
 }
 
 /** The size of an image after `turns` quarter turns. */
@@ -121,9 +129,15 @@ export function turnedSize(s: { width: number; height: number }, turns: number) 
 /**
  * Applies the crop and rotation at full resolution. With a page outline the
  * page is cut out along it and squared up (perspective correction), then
- * turned. No change means no new file.
+ * turned. No change means no new file. `cropped` says a crop was set (a
+ * found page, or one the person adjusted), for the reading order.
  */
-export async function applyCrop(src: Source, crop: Crop | null): Promise<Source> {
+export async function applyCrop(src: Source, crop: Crop | null, cropped = false): Promise<Source> {
+  const out = await cropImage(src, crop);
+  return cropped ? { ...out, cropped } : out;
+}
+
+async function cropImage(src: Source, crop: Crop | null): Promise<Source> {
   if (!crop) return src;
   if (crop.quad) {
     const flat = await flatten(src.uri, unturnQuad(crop.quad, src, crop.turns));
@@ -164,7 +178,9 @@ export interface ReadResult {
  * One page read: Vision on the whole (flattened) image, then a second, closer
  * look at the lines it was unsure of or that are small print (enlarged crops,
  * read again all at once). A second reading replaces a line only when it is
- * more confident. The added time is logged.
+ * more confident. The added time is logged. Then the words the dictionary
+ * does not know are marked (for the hard-to-read note, whose numbers are
+ * logged per page), and the lines are put in reading order.
  */
 async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrLine[]; width: number; height: number }> {
   const first = await recognize(src.uri, { languages, autoDetectLanguage: true, languageCorrection: true });
@@ -191,7 +207,14 @@ async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrL
       // the first reading stands
     }
   }
-  return { lines: orderLines(lines, width, height), width, height };
+  const unknown = await unknownWords(lines.map((l) => l.text), languages[0] ?? 'en-US');
+  lines = lines.map((l, i) => ({ ...l, unknown: unknown[i] ?? [] }));
+  const n = nudgeCounts(lines);
+  console.log(
+    `[ocr] unsure words: ${n.unsure} of ${n.words} (${Math.round(n.share * 100)}%; low at first look ${n.lowFirstLook}, ` +
+      `unknown and unsure ${n.unknownUnsure}; dictionary ${n.unknown} unknown of ${n.checked}), note ${shouldNudge(lines) ? 'yes' : 'no'}`
+  );
+  return { lines: readingOrder(lines, width, height, { cropped: src.cropped === true }), width, height };
 }
 
 /**
