@@ -20,6 +20,8 @@ interface NativeVisionOcr {
   recognizeRegions(uri: string, options: RecognizeOptions & { boxes: number[]; scale: number }): Promise<RegionsResult>;
   sharpness(uri: string, options: { region: number[]; size: number }): Promise<number>;
   focusAt(x: number, y: number, hold: number): Promise<boolean>;
+  unknownWords(texts: string[], language: string): Promise<number[][]>;
+  isTestBuild(): boolean;
 }
 
 // Optional so the JS still loads where the native side is missing (web
@@ -136,6 +138,37 @@ export async function focusAt(x: number, y: number, holdSeconds: number): Promis
   if (!Native) return false;
   try {
     return await Native.focusAt(x, y, holdSeconds);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * For each text, the positions of its space-separated words that the
+ * phone's dictionary does not know (words of three or more letters; names
+ * with a capital first letter and anything with digits are skipped). Empty
+ * lists when it cannot be checked.
+ */
+export async function unknownWords(texts: string[], language: string): Promise<number[][]> {
+  const none = texts.map(() => [] as number[]);
+  if (!Native || texts.length === 0) return none;
+  try {
+    const r = await Native.unknownWords(texts, language.replace(/-/g, '_'));
+    return r.length === texts.length ? r : none;
+  } catch {
+    return none;
+  }
+}
+
+/**
+ * True in a TestFlight or development build (the App Store receipt is a
+ * sandbox one), false in the App Store build and wherever it cannot tell.
+ * Gates the hidden test tools in Settings.
+ */
+export function isTestBuild(): boolean {
+  if (!Native) return false;
+  try {
+    return Native.isTestBuild() === true;
   } catch {
     return false;
   }

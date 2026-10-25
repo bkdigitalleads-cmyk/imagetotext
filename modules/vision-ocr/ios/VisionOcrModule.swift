@@ -120,28 +120,66 @@ public class VisionOcrModule: Module {
     AsyncFunction("focusAt") { (x: Double, y: Double, hold: Double) -> Bool in
       return VisionOcrModule.focusAt(x: x, y: y, hold: hold)
     }
+
+    // UITextChecker is UIKit, so it runs on the main queue. A page is a few
+    // hundred words; this takes milliseconds.
+    AsyncFunction("unknownWords") { (texts: [String], language: String) -> [[Int]] in
+      return MainActor.assumeIsolated { VisionOcrModule.unknownWords(texts: texts, language: language) }
+    }.runOnQueue(.main)
+
+    // TestFlight and development builds carry a sandbox receipt; the App
+    // Store build does not. Gates the hidden test tools in Settings.
+    Function("isTestBuild") { () -> Bool in
+      return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+    }
+  }
+
+  // MARK: - Dictionary check
+
+  /**
+   For each text, the positions of its whitespace-separated words that the
+   system dictionary does not know. Only words of three or more letters are
+   checked (no digits or inner punctuation), and words with a capital first
+   letter are skipped unless all capitals (names are often missing from the
+   dictionary). The same rule as `checkable` in src/accuracy.ts.
+   */
+  @MainActor
+  static func unknownWords(texts: [String], language: String) -> [[Int]] {
+    let checker = UITextChecker()
+    let available = UITextChecker.availableLanguages
+    let lang = available.first(where: { $0 == language })
+      ?? available.first(where: { $0.hasPrefix(String(language.prefix(2))) })
+      ?? "en_US"
+    return texts.map { text in
+      var out: [Int] = []
+      let tokens = text.split(whereSeparator: { $0.isWhitespace })
+      for (i, token) in tokens.enumerated() {
+        let word = String(token).trimmingCharacters(in: CharacterSet.letters.inverted)
+        guard word.count >= 3, word.allSatisfy({ $0.isLetter }) else { continue }
+        if let first = word.first, first.isUppercase, word != word.uppercased() { continue }
+        let length = (word as NSString).length
+        let miss = checker.rangeOfMisspelledWord(
+          in: word, range: NSRange(location: 0, length: length), startingAt: 0, wrap: false, language: lang)
+        if miss.location != NSNotFound { out.append(i) }
+      }
+      return out
+    }
   }
 
   // MARK: - Recognition
 
   static func recognize(uri: String, options: RecognizeOptions) throws -> [String: Any] {
-    let url = fileUrl(uri)
-    guard let image = UIImage(contentsOfFile: url.path), let cgImage = image.cgImage else {
-      throw ImageOpenException(uri)
-    }
+    // Upright pixels first, so Vision's coordinates mean the same thing for
+    // every image: a flattened page, a crop, an untouched photo from the
+    // library (often stored sideways with an orientation tag), a PDF page.
+    let cgImage = try uprightCGImage(uri: uri)
 
     let request = textRequest(
       languages: options.languages,
       autoDetect: options.autoDetectLanguage,
       correction: options.languageCorrection
     )
-
-    // Full resolution, with the photo's own orientation, so boxes match the image as shown.
-    let handler = VNImageRequestHandler(
-      cgImage: cgImage,
-      orientation: CGImagePropertyOrientation(image.imageOrientation),
-      options: [:]
-    )
+    let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
     try handler.perform([request])
 
     let wantCandidates = min(10, max(1, options.candidates))
@@ -167,14 +205,15 @@ public class VisionOcrModule: Module {
         "text": text,
         "confidence": Double(best.confidence),
         "box": box(observation.boundingBox),
+        "corners": corners(observation),
         "words": words,
         "alternatives": candidates.dropFirst().map { $0.string },
       ])
     }
 
     return [
-      "width": Int(image.size.width * image.scale),
-      "height": Int(image.size.height * image.scale),
+      "width": cgImage.width,
+      "height": cgImage.height,
       "lines": lines,
     ]
   }
@@ -215,6 +254,13 @@ public class VisionOcrModule: Module {
     ]
   }
 
+  /// A line's own four corners (it can sit at an angle): top-left, top-right,
+  /// bottom-right, bottom-left, as fractions with the origin at the TOP left.
+  static func corners(_ o: VNRectangleObservation) -> [Double] {
+    let flip = { (p: CGPoint) -> [Double] in [Double(p.x), 1 - Double(p.y)] }
+    return flip(o.topLeft) + flip(o.topRight) + flip(o.bottomRight) + flip(o.bottomLeft)
+  }
+
   static func fileUrl(_ uri: String) -> URL {
     if let url = URL(string: uri), url.scheme != nil {
       return url
@@ -238,6 +284,24 @@ public class VisionOcrModule: Module {
     return oriented.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
   }
 
+  /// The image as shown, as pixels that are already upright. A photo stored
+  /// sideways with an orientation tag is turned for real, so Vision never
+  /// has to interpret the tag and every path shares one coordinate system.
+  static func uprightCGImage(uri: String) throws -> CGImage {
+    let url = fileUrl(uri)
+    guard let image = UIImage(contentsOfFile: url.path), let cgImage = image.cgImage else {
+      throw ImageOpenException(uri)
+    }
+    if image.imageOrientation == .up {
+      return cgImage
+    }
+    let oriented = CIImage(cgImage: cgImage).oriented(CGImagePropertyOrientation(image.imageOrientation))
+    guard let upright = ciContext.createCGImage(oriented, from: oriented.extent.integral) else {
+      throw ImageOpenException(uri)
+    }
+    return upright
+  }
+
   static func writeJpeg(_ cgImage: CGImage, folder: String, quality: CGFloat) throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(folder, isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -254,17 +318,10 @@ public class VisionOcrModule: Module {
   /// The page in a photo: document segmentation first, rectangle detection
   /// when that finds nothing. Corners are pixels of the image as shown.
   static func documentBounds(uri: String) throws -> [String: Any] {
-    let url = fileUrl(uri)
-    guard let image = UIImage(contentsOfFile: url.path), let cgImage = image.cgImage else {
-      throw ImageOpenException(uri)
-    }
-    let width = Double(image.size.width * image.scale)
-    let height = Double(image.size.height * image.scale)
-    let handler = VNImageRequestHandler(
-      cgImage: cgImage,
-      orientation: CGImagePropertyOrientation(image.imageOrientation),
-      options: [:]
-    )
+    let cgImage = try uprightCGImage(uri: uri)
+    let width = Double(cgImage.width)
+    let height = Double(cgImage.height)
+    let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
 
     var found: VNRectangleObservation?
     var method = "none"

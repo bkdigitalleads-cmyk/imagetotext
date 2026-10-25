@@ -17,6 +17,8 @@ export const SECOND_PASS_MAX_LINES = 40;
 export const SECOND_PASS_SCALE = 2;
 /** The nudge shows when more than this share of a page's words are unsure. */
 export const NUDGE_UNSURE_SHARE = 0.1;
+/** ...or when more than this share of the words the dictionary can check are unknown to it (garbled, however confident). */
+export const NUDGE_UNKNOWN_SHARE = 0.3;
 /** A found page outline is used only at this confidence or more. */
 export const PAGE_MIN_CONFIDENCE = 0.6;
 /** ...and only if it covers at least this share of the photo. */
@@ -62,38 +64,107 @@ export interface SecondReading {
 
 /**
  * The lines with second-pass readings swapped in where they are more
- * confident. The original line box is kept; the words come from the reading
- * that won, so a tapped word still finds its place on the page.
+ * confident. The original line box and corners are kept; the words come
+ * from the reading that won, so a tapped word still finds its place on the
+ * page. The first look's confidence is kept too: a line Vision had to read
+ * twice still counts toward the hard-to-read note.
  */
 export function mergeSecondPass(lines: OcrLine[], readings: SecondReading[]): OcrLine[] {
   const out = lines.slice();
   for (const r of readings) {
     const line = out[r.index];
     if (!line || !r.text.trim() || !(r.confidence > line.confidence)) continue;
-    out[r.index] = { text: r.text, confidence: r.confidence, box: line.box, words: r.words, alternatives: r.alternatives };
+    const { unknown: _stale, ...kept } = line;
+    void _stale;
+    out[r.index] = {
+      ...kept,
+      text: r.text,
+      confidence: r.confidence,
+      words: r.words,
+      alternatives: r.alternatives,
+      firstConfidence: line.firstConfidence ?? line.confidence,
+    };
   }
   return out;
 }
 
 // ---------- the nudge ----------
+//
+// Vision's line confidence is coarse on the device (mostly 1.0, 0.5 or
+// 0.3), and the second pass lifts most low lines to 1.0, so build 2's
+// note (low lines after the second pass) never showed. A word now counts
+// as unsure when:
+//  - its line was read below SECOND_PASS_CONFIDENCE at the first look
+//    (before any second reading replaced it), or
+//  - the phone's dictionary does not know it AND Vision was not fully sure
+//    of it (its line under 1.0, or the runner-up reading of the line has a
+//    different word there).
+// The note shows when more than NUDGE_UNSURE_SHARE of the words are unsure,
+// or when more than NUDGE_UNKNOWN_SHARE of the words the dictionary checked
+// are unknown to it (garbled text read with false confidence).
+
+type NudgeLine = Pick<OcrLine, 'text' | 'confidence'> & Partial<Pick<OcrLine, 'alternatives' | 'firstConfidence' | 'unknown'>>;
 
 const isWord = (w: string) => /[\p{L}\p{N}]/u.test(w);
+const bareWord = (w: string) => w.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+/** A word the dictionary check looks at (the same rule as the native side): three or more letters, no capital first letter unless all capitals. */
+const checkable = (w: string) => {
+  const word = w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
+  return word.length >= 3 && /^\p{L}+$/u.test(word) && !(/^\p{Lu}/u.test(word) && word !== word.toLocaleUpperCase());
+};
 
-/** Share of a page's words (tokens with a letter or digit) on lines read below the confidence threshold. */
-export function unsureShare(lines: Pick<OcrLine, 'text' | 'confidence'>[]): number {
-  let total = 0;
-  let unsure = 0;
+export interface NudgeCounts {
+  /** Tokens with a letter or digit. */
+  words: number;
+  /** Words on lines read below SECOND_PASS_CONFIDENCE at the first look. */
+  lowFirstLook: number;
+  /** Words the dictionary does not know, on a line Vision was not fully sure of or where its runner-up differs. */
+  unknownUnsure: number;
+  /** Words the dictionary checked, and how many it did not know. */
+  checked: number;
+  unknown: number;
+  /** Words counted unsure (each word once). */
+  unsure: number;
+  share: number;
+}
+
+/** What the hard-to-read note is decided from, per page; logged after every read. */
+export function nudgeCounts(lines: NudgeLine[]): NudgeCounts {
+  const c: NudgeCounts = { words: 0, lowFirstLook: 0, unknownUnsure: 0, checked: 0, unknown: 0, unsure: 0, share: 0 };
   for (const l of lines) {
-    const n = (l.text.match(/\S+/g) ?? []).filter(isWord).length;
-    total += n;
-    if (l.confidence < SECOND_PASS_CONFIDENCE) unsure += n;
+    const tokens = l.text.match(/\S+/g) ?? [];
+    const low = (l.firstConfidence ?? l.confidence) < SECOND_PASS_CONFIDENCE;
+    const unknown = new Set(l.unknown ?? []);
+    const runnerUp = l.alternatives?.[0];
+    const runnerWords = runnerUp != null ? new Set(runnerUp.split(/\s+/).map(bareWord)) : null;
+    tokens.forEach((t, k) => {
+      if (checkable(t)) {
+        c.checked++;
+        if (unknown.has(k)) c.unknown++;
+      }
+      if (!isWord(t)) return;
+      c.words++;
+      const torn = runnerWords != null && !runnerWords.has(bareWord(t));
+      const unknownUnsure = unknown.has(k) && (l.confidence < 1 || torn);
+      if (low) c.lowFirstLook++;
+      if (unknownUnsure) c.unknownUnsure++;
+      if (low || unknownUnsure) c.unsure++;
+    });
   }
-  return total === 0 ? 0 : unsure / total;
+  c.share = c.words === 0 ? 0 : c.unsure / c.words;
+  return c;
+}
+
+/** Share of a page's words that count as unsure (see above). */
+export function unsureShare(lines: NudgeLine[]): number {
+  return nudgeCounts(lines).share;
 }
 
 /** Whether the Result screen should say the photo was hard to read. */
-export function shouldNudge(lines: Pick<OcrLine, 'text' | 'confidence'>[]): boolean {
-  return unsureShare(lines) > NUDGE_UNSURE_SHARE;
+export function shouldNudge(lines: NudgeLine[]): boolean {
+  const c = nudgeCounts(lines);
+  if (c.words === 0) return false;
+  return c.share > NUDGE_UNSURE_SHARE || (c.checked >= 10 && c.unknown / c.checked > NUDGE_UNKNOWN_SHARE);
 }
 
 // ---------- page outlines ----------
@@ -143,6 +214,34 @@ export function usablePage(found: { found: boolean; confidence: number; quad: Qu
   if (!isConvex(q)) return false;
   const share = quadArea(q) / Math.max(1, size.width * size.height);
   return share >= PAGE_MIN_AREA && share <= PAGE_MAX_AREA;
+}
+
+/** A confident outline that covers the whole photo: a screenshot or a scan, nothing to crop. */
+export function wholePhoto(found: { found: boolean; confidence: number; quad: Quad | null }, size: { width: number; height: number }): boolean {
+  if (!found.found || !found.quad || found.confidence < PAGE_MIN_CONFIDENCE) return false;
+  return quadArea(orderQuad(found.quad)) / Math.max(1, size.width * size.height) > PAGE_MAX_AREA;
+}
+
+/** When no page is found, the corner handles start this share in from each edge. */
+export const GUESS_INSET = 0.06;
+
+/**
+ * Where the corner handles start when no page was found: on `rect` (the
+ * camera's page guide) when given, otherwise GUESS_INSET in from each edge.
+ */
+export function guessQuad(size: { width: number; height: number }, rect?: { x: number; y: number; width: number; height: number }): Quad {
+  const r = rect ?? {
+    x: size.width * GUESS_INSET,
+    y: size.height * GUESS_INSET,
+    width: size.width * (1 - 2 * GUESS_INSET),
+    height: size.height * (1 - 2 * GUESS_INSET),
+  };
+  return [
+    { x: r.x, y: r.y },
+    { x: r.x + r.width, y: r.y },
+    { x: r.x + r.width, y: r.y + r.height },
+    { x: r.x, y: r.y + r.height },
+  ];
 }
 
 /** Corners kept inside the image. */

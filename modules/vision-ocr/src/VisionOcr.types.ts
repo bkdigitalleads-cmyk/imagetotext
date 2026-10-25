@@ -17,10 +17,28 @@ export interface OcrLine {
   text: string;
   /** Vision's confidence for the whole line, 0 to 1. */
   confidence: number;
+  /** The upright box around the line. */
   box: OcrBox;
+  /**
+   * The line's own corners when it sits at an angle: top-left x, y,
+   * top-right, bottom-right, bottom-left, as fractions, origin top left.
+   * Missing on pages read before build 3.
+   */
+  corners?: number[];
   words: OcrWord[];
   /** Vision's next-best readings of the same line, best first. */
   alternatives: string[];
+  /**
+   * Vision's confidence at the first look, when a second, closer reading
+   * replaced the line. Missing when the first reading stood (and on pages
+   * read before build 3).
+   */
+  firstConfidence?: number;
+  /**
+   * The words (by position among the line's space-separated tokens) the
+   * phone's dictionary does not know. Missing on pages read before build 3.
+   */
+  unknown?: number[];
 }
 
 export interface OcrResult {
