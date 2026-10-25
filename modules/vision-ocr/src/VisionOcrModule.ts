@@ -47,6 +47,7 @@ export async function recognize(uri: string, options: RecognizeOptions = {}): Pr
     autoDetectLanguage: options.autoDetectLanguage ?? true,
     languageCorrection: options.languageCorrection ?? true,
     candidates: options.candidates ?? 3,
+    documentReader: options.documentReader ?? true,
   });
 }
 

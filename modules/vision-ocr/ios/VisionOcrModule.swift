@@ -35,6 +35,9 @@ struct RecognizeOptions: Record {
   /// How many candidates to read per line. The first is the text; the rest
   /// come back as `alternatives`, which the app uses to spot unsure words.
   @Field var candidates: Int = 3
+  /// On iOS 26 and later, read with the document reader (paragraphs and
+  /// reading order from Vision itself), falling back to line reading.
+  @Field var documentReader: Bool = true
 }
 
 struct RenderPdfOptions: Record {
@@ -174,6 +177,19 @@ public class VisionOcrModule: Module {
     // library (often stored sideways with an orientation tag), a PDF page.
     let cgImage = try uprightCGImage(uri: uri)
 
+    // iOS 26 and later: Vision's document reader, which keeps columns apart
+    // and returns lines in reading order with their paragraphs. Anything
+    // wrong with it (an error, nothing found) falls back to line reading.
+    #if compiler(>=6.2)
+    if options.documentReader {
+      if #available(iOS 26.0, *) {
+        if let lines = readDocument(cgImage, options: options), !lines.isEmpty {
+          return ["width": cgImage.width, "height": cgImage.height, "lines": lines, "reader": "document"]
+        }
+      }
+    }
+    #endif
+
     let request = textRequest(
       languages: options.languages,
       autoDetect: options.autoDetectLanguage,
@@ -215,8 +231,108 @@ public class VisionOcrModule: Module {
       "width": cgImage.width,
       "height": cgImage.height,
       "lines": lines,
+      "reader": "lines",
     ]
   }
+
+  #if compiler(>=6.2)
+  /**
+   The document reader (RecognizeDocumentsRequest, iOS 26). Lines come back
+   in reading order (their place in the document's own transcript), each
+   with "order", its paragraph ("para", -1 for lists, tables and loose
+   text) and, when Vision says so, whether it wraps into the next line
+   ("wraps"). Same line shape as `recognize` otherwise. Nil when it fails.
+   */
+  @available(iOS 26.0, *)
+  static func readDocument(_ cgImage: CGImage, options: RecognizeOptions) -> [[String: Any]]? {
+    var request = RecognizeDocumentsRequest()
+    let wanted = languages(for: VNRecognizeTextRequest(), wanted: options.languages)
+    request.textRecognitionOptions.recognitionLanguages = wanted.map { Locale.Language(identifier: $0) }
+    request.textRecognitionOptions.useLanguageCorrection = options.languageCorrection
+    request.textRecognitionOptions.automaticallyDetectLanguage = options.autoDetectLanguage
+    request.textRecognitionOptions.maximumCandidateCount = min(10, max(1, options.candidates))
+
+    // The request is async; this function runs on the module's own queue,
+    // so wait for it here.
+    let req = request
+    let result = DocumentResult()
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+      result.value = try? await req.perform(on: cgImage, orientation: .up)
+      done.signal()
+    }
+    done.wait()
+
+    var observations: [DocumentObservation] = []
+    if let many = result.value as? [DocumentObservation] {
+      observations = many
+    } else if let one = result.value as? DocumentObservation {
+      observations = [one]
+    }
+    guard let document = observations.first?.document else { return nil }
+    let all = document.text.lines
+    if all.isEmpty { return nil }
+
+    var paraOf: [RecognizedTextObservation: Int] = [:]
+    for (p, para) in document.paragraphs.enumerated() {
+      for line in para.lines { paraOf[line] = p }
+    }
+
+    // Reading order: where each line's text sits in the document transcript.
+    let transcript = document.text.transcript
+    var searchFrom: [String: String.Index] = [:]
+    var keyed: [(Int, Int, RecognizedTextObservation)] = []
+    for (i, line) in all.enumerated() {
+      let t = line.transcript
+      let start = searchFrom[t] ?? transcript.startIndex
+      if !t.isEmpty, start <= transcript.endIndex, let r = transcript.range(of: t, range: start..<transcript.endIndex) {
+        searchFrom[t] = r.upperBound
+        keyed.append((transcript.distance(from: transcript.startIndex, to: r.lowerBound), i, line))
+      } else {
+        keyed.append((Int.max, i, line))
+      }
+    }
+    keyed.sort { ($0.0, $0.1) < ($1.0, $1.1) }
+
+    let wantCandidates = min(10, max(1, options.candidates))
+    let flip = { (p: NormalizedPoint) -> [Double] in [Double(p.x), 1 - Double(p.y)] }
+    var lines: [[String: Any]] = []
+    for (order, item) in keyed.enumerated() {
+      let observation = item.2
+      let candidates = observation.topCandidates(wantCandidates)
+      guard let best = candidates.first else { continue }
+      let text = best.string
+      if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+
+      var words: [[String: Any]] = []
+      text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: .byWords) { _, range, _, _ in
+        guard let rect = best.boundingBox(for: range) else { return }
+        let ns = NSRange(range, in: text)
+        words.append([
+          "start": ns.location,
+          "end": ns.location + ns.length,
+          "box": box(rect.boundingBox.cgRect),
+        ])
+      }
+
+      var line: [String: Any] = [
+        "text": text,
+        "confidence": Double(best.confidence),
+        "box": box(observation.boundingBox.cgRect),
+        "corners": flip(observation.topLeft) + flip(observation.topRight) + flip(observation.bottomRight) + flip(observation.bottomLeft),
+        "words": words,
+        "alternatives": candidates.dropFirst().map { $0.string },
+        "order": order,
+        "para": paraOf[observation] ?? -1,
+      ]
+      if let wraps = observation.shouldWrapToNextLine {
+        line["wraps"] = wraps
+      }
+      lines.append(line)
+    }
+    return lines
+  }
+  #endif
 
   static func textRequest(languages wanted: [String], autoDetect: Bool, correction: Bool) -> VNRecognizeTextRequest {
     let request = VNRecognizeTextRequest()
@@ -436,38 +552,56 @@ public class VisionOcrModule: Module {
         let handler = VNImageRequestHandler(cgImage: cg, orientation: .up, options: [:])
         guard (try? handler.perform([request])) != nil, let observations = request.results, !observations.isEmpty else { return }
 
-        // The line we came for is the one nearest the crop's middle.
+        // The line we came for: every observation on its row (Vision can
+        // read one line back as two pieces, "the quick brown" and "fox
+        // jumps"), left to right. Keeping only one piece lost words in build 3.
         let target = (by + bh / 2 - ry) / rh
-        let pick = observations.min { a, b in
+        let halfLine = 0.5 * bh / rh
+        var row = observations.filter { abs((1 - Double($0.boundingBox.midY)) - target) < halfLine }
+        if row.isEmpty, let nearest = observations.min(by: { a, b in
           abs((1 - Double(a.boundingBox.midY)) - target) < abs((1 - Double(b.boundingBox.midY)) - target)
+        }) {
+          row = [nearest]
         }
-        guard let observation = pick else { return }
-        let candidates = observation.topCandidates(wantCandidates)
-        guard let best = candidates.first else { return }
-        let text = best.string
+        row.sort { $0.boundingBox.minX < $1.boundingBox.minX }
 
+        var text = ""
+        var confidence = 1.0
         var words: [[String: Any]] = []
-        text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: .byWords) { _, range, _, _ in
-          guard let rect = try? best.boundingBox(for: range) else { return }
-          let r = rect.boundingBox
-          let ns = NSRange(range, in: text)
-          words.append([
-            "start": ns.location,
-            "end": ns.location + ns.length,
-            "box": [
-              "x": (rx + Double(r.minX) * rw) / W,
-              "y": (ry + (1 - Double(r.maxY)) * rh) / H,
-              "width": Double(r.width) * rw / W,
-              "height": Double(r.height) * rh / H,
-            ],
-          ])
+        var alternatives: [String] = []
+        for observation in row {
+          let candidates = observation.topCandidates(wantCandidates)
+          guard let best = candidates.first else { continue }
+          let piece = best.string
+          if piece.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+          let shift = text.isEmpty ? 0 : (text as NSString).length + 1
+          piece.enumerateSubstrings(in: piece.startIndex..<piece.endIndex, options: .byWords) { _, range, _, _ in
+            guard let rect = try? best.boundingBox(for: range) else { return }
+            let r = rect.boundingBox
+            let ns = NSRange(range, in: piece)
+            words.append([
+              "start": shift + ns.location,
+              "end": shift + ns.location + ns.length,
+              "box": [
+                "x": (rx + Double(r.minX) * rw) / W,
+                "y": (ry + (1 - Double(r.maxY)) * rh) / H,
+                "width": Double(r.width) * rw / W,
+                "height": Double(r.height) * rh / H,
+              ],
+            ])
+          }
+          text = text.isEmpty ? piece : text + " " + piece
+          confidence = min(confidence, Double(best.confidence))
+          // Runner-up readings only line up with the text when there is one piece.
+          alternatives = row.count == 1 ? candidates.dropFirst().map { $0.string } : []
         }
+        guard !text.isEmpty else { return }
 
         collected.set(i, [
           "text": text,
-          "confidence": Double(best.confidence),
+          "confidence": confidence,
           "words": words,
-          "alternatives": candidates.dropFirst().map { $0.string },
+          "alternatives": alternatives,
         ])
       }
     }
@@ -663,6 +797,11 @@ final class FocusTicket: @unchecked Sendable {
     defer { lock.unlock() }
     return ticket == value
   }
+}
+
+/// The document reader's result, handed from its task back to the waiting queue.
+final class DocumentResult: @unchecked Sendable {
+  var value: Any?
 }
 
 /// Results written from several threads at once, one slot per region, behind a lock.
