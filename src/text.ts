@@ -69,8 +69,20 @@ export const FULL_LINE = 0.85;
  * or sits indented under it (`indented`, known only for recognized text).
  * `widths` are pixels for recognized text and characters for the person's
  * own edits; only ratios matter.
+ *
+ * Handwriting (`handwritten`): lines never join, except a word split by a
+ * hyphen at the end of a line ("water-" / "cress"); handwritten lines are
+ * long or short for reasons that have nothing to do with wrapping. Where
+ * the document reader said whether a line wraps (`wraps`, iOS 26), print
+ * follows it instead of the width test.
  */
-export function joinPlan(widths: number[], texts: string[], pageFull: number, indented: boolean[] = []): boolean[] {
+export function joinPlan(
+  widths: number[],
+  texts: string[],
+  pageFull: number,
+  indented: boolean[] = [],
+  opts: { handwritten?: boolean; wraps?: (boolean | undefined)[] } = {}
+): boolean[] {
   const n = widths.length;
   if (n < 2) return [];
   const reference = Math.max(...widths, pageFull);
@@ -85,6 +97,10 @@ export function joinPlan(widths: number[], texts: string[], pageFull: number, in
     const cur = texts[i].trim();
     const next = texts[i + 1].trim();
     if (LIST_MARKER.test(next)) return false;
+    const hyphenSplit = HYPHEN_END.test(cur) && STARTS_LOWER.test(next);
+    if (opts.handwritten) return hyphenSplit;
+    const wraps = opts.wraps?.[i];
+    if (wraps != null) return wraps || hyphenSplit;
     if (/\d$/.test(cur) && /\d$/.test(next)) return false;
     const continues = STARTS_LOWER.test(next) && !/[.!?:;]$/.test(cur) && (LIST_MARKER.test(cur) || indented[i + 1] === true);
     if (continues) return true;
@@ -196,10 +212,14 @@ export function fractionToken(token: string): string {
  *  - a lone "I" or "l" before a unit in capitals ("I TABLESPOON") is the number 1
  *  - "I-INCH" starts with the number 1
  *  - a fraction Vision returned as one token becomes one fraction character
+ *  - what is left of a fraction that is not one whole token ("11⁄2",
+ *    "1¹/₂") gets plain digits and a plain slash, so the phone never draws
+ *    it as a neat fraction or a mixed number ("1½") it was not
  * No digit is ever added next to a fraction: "l¼" or "I ½" stay as read.
  */
 export function fixToken(token: string, next?: string): string {
   let t = fractionToken(token);
+  if (/\u2044/.test(t) || (/\//.test(t) && /[⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉]/.test(t))) t = plainDigits(t).replace(/\u2044/g, '/');
   if ((t === 'I' || t === 'l') && next != null && CAPS_UNIT.test(next.replace(/^[([]/, ''))) t = '1';
   return t.replace(/^([([]?)[Il](?=-(?:INCH(?:ES)?|IN)(?![A-Za-z]))/, '$11');
 }
@@ -235,16 +255,24 @@ export interface Run {
   unsure: boolean;
 }
 
+/** A number written as or with a fraction: a fraction character, a fraction slash, small digits, or "n/d". */
+export function isFractionLike(token: string): boolean {
+  return new RegExp(`[${FRACTION_GLYPHS}\\u2044${SUPERSCRIPT}${SUBSCRIPT}]|\\d/\\d`).test(token);
+}
+
 const bare = (w: string) => w.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
 /**
- * Unsure means: the whole line read with low confidence, or the runner-up
- * reading of the line does not have this word (Vision was torn about it).
+ * Unsure means: the whole line read with low confidence, a number with a
+ * fraction in it on a line Vision was not fully sure of (a recipe's "½"
+ * read wrong is worse than garbled), or the runner-up reading of the line
+ * does not have this word (Vision was torn about it).
  */
 export function isUnsure(token: string, line: Pick<OcrLine, 'confidence' | 'alternatives'>): boolean {
   const word = bare(token);
   if (!word) return false;
   if (line.confidence < LOW_LINE_CONFIDENCE) return true;
+  if (line.confidence < 1 && /\d|[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒]/.test(token) && isFractionLike(token)) return true;
   const runnerUp = line.alternatives[0];
   if (runnerUp == null) return false;
   return !runnerUp.split(/\s+/).some((w) => bare(w) === word);
@@ -279,16 +307,25 @@ function indentedUnder(line: OcrLine, above: OcrLine): boolean {
 /**
  * The words of a page, paragraph by paragraph, with what goes between
  * them. Raw keeps the page's own line breaks and spacing; Clean up joins
- * lines and uses single spaces. `modelText` of the result is exactly what
- * Copy, Share and Export use, and matches cleanText(rawText) when clean.
+ * lines where they ran out of room (never on handwriting, `handwritten`,
+ * except a word split by a hyphen) and uses single spaces. `modelText` of
+ * the result is exactly what Copy, Share and Export use.
  */
-export function buildRuns(paragraphs: OcrLine[][], clean: boolean): Run[] {
+export function buildRuns(paragraphs: OcrLine[][], clean: boolean, opts: { handwritten?: boolean } = {}): Run[] {
   const runs: Run[] = [];
   let lineIndex = 0;
   // Clean up joins a line to the next only where it ran out of room (joinPlan, in line-box widths).
   const pageFull = clean ? usualFullWidth(paragraphs.flat().map((l) => l.box.width)) : 0;
   paragraphs.forEach((lines, p) => {
-    const plan = clean ? joinPlan(lines.map((l) => l.box.width), lines.map((l) => l.text), pageFull, lines.map((l, i) => i > 0 && indentedUnder(l, lines[i - 1]))) : [];
+    const plan = clean
+      ? joinPlan(
+          lines.map((l) => l.box.width),
+          lines.map((l) => l.text),
+          pageFull,
+          lines.map((l, i) => i > 0 && indentedUnder(l, lines[i - 1])),
+          { handwritten: opts.handwritten, wraps: lines.map((l) => l.wraps) }
+        )
+      : [];
     lines.forEach((line, li) => {
       const index = lineIndex++;
       const text = clean ? line.text.replace(/[\t   ]/g, ' ') : line.text;

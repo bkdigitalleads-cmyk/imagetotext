@@ -68,12 +68,18 @@ export interface SecondReading {
  * from the reading that won, so a tapped word still finds its place on the
  * page. The first look's confidence is kept too: a line Vision had to read
  * twice still counts toward the hard-to-read note.
+ *
+ * A second reading never loses words: one with fewer words than the first
+ * is ignored (build 3 lost "fox jumps" that way), and so is one that has a
+ * number run into a fraction ("1½", "11/2") the first reading did not have.
  */
 export function mergeSecondPass(lines: OcrLine[], readings: SecondReading[]): OcrLine[] {
   const out = lines.slice();
   for (const r of readings) {
     const line = out[r.index];
     if (!line || !r.text.trim() || !(r.confidence > line.confidence)) continue;
+    if (wordCount(r.text) < wordCount(line.text)) continue;
+    if (gluedFractions(r.text) > gluedFractions(line.text)) continue;
     const { unknown: _stale, ...kept } = line;
     void _stale;
     out[r.index] = {
@@ -87,6 +93,10 @@ export function mergeSecondPass(lines: OcrLine[], readings: SecondReading[]): Oc
   }
   return out;
 }
+
+const wordCount = (t: string) => (t.match(/\S+/g) ?? []).length;
+/** Numbers run straight into a fraction: "1½", "11/2", "1¹/₂". */
+const gluedFractions = (t: string) => (t.match(/\d[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒¹²³⁴⁵⁶⁷⁸⁹]|\d{2,}[/\u2044]\d/g) ?? []).length;
 
 // ---------- the nudge ----------
 //

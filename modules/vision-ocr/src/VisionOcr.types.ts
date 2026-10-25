@@ -39,6 +39,15 @@ export interface OcrLine {
    * phone's dictionary does not know. Missing on pages read before build 3.
    */
   unknown?: number[];
+  /**
+   * From the document reader (iOS 26 and later): the line's place in
+   * Vision's own reading order, its paragraph (-1 for list items, tables
+   * and loose text), and whether Vision says it wraps into the next line.
+   * Missing from line reading and on pages read before build 4.
+   */
+  order?: number;
+  para?: number;
+  wraps?: boolean;
 }
 
 export interface OcrResult {
@@ -46,6 +55,8 @@ export interface OcrResult {
   width: number;
   height: number;
   lines: OcrLine[];
+  /** Which reader ran: "document" (iOS 26 and later) or "lines". */
+  reader?: 'document' | 'lines';
 }
 
 export interface RecognizeOptions {
@@ -56,6 +67,8 @@ export interface RecognizeOptions {
   languageCorrection?: boolean;
   /** Readings per line; extra ones come back as alternatives. */
   candidates?: number;
+  /** iOS 26 and later: use the document reader (default true). */
+  documentReader?: boolean;
 }
 
 export interface RenderedPage {

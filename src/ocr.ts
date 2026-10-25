@@ -6,7 +6,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { documentBounds, flatten, groupParagraphs, readingOrder, recognize, recognizeRegions, renderPdf, sharpness, unknownWords, OcrLine, Quad } from '../modules/vision-ocr';
+import { documentBounds, flatten, groupParagraphs, isHandwritten, readingOrder, recognize, recognizeRegions, renderPdf, sharpness, unknownWords, OcrLine, Quad } from '../modules/vision-ocr';
 import { addPages, createDoc, getDoc, Page, PageInput, PageOrigin, replacePage, setDocTitle } from './db';
 import { keepPage, removeFiles } from './files';
 import { buildRuns, cleanText, modelText, Run } from './text';
@@ -187,6 +187,7 @@ async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrL
   const width = first.width || src.width;
   const height = first.height || src.height;
   let lines = first.lines;
+  console.log(`[ocr] reader: ${first.reader ?? 'lines'}, ${lines.length} lines`);
   const picks = pickSecondPass(lines);
   if (picks.length > 0) {
     const started = Date.now();
@@ -214,8 +215,25 @@ async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrL
     `[ocr] unsure words: ${n.unsure} of ${n.words} (${Math.round(n.share * 100)}%; low at first look ${n.lowFirstLook}, ` +
       `unknown and unsure ${n.unknownUnsure}; dictionary ${n.unknown} unknown of ${n.checked}), note ${shouldNudge(lines) ? 'yes' : 'no'}`
   );
-  return { lines: readingOrder(lines, width, height, { cropped: src.cropped === true }), width, height };
+  const wordsIn = countTokens(lines);
+  let dropped = 0;
+  const ordered = readingOrder(lines, width, height, {
+    cropped: src.cropped === true,
+    onDrop: (l) => {
+      dropped += countTokens([l]);
+      console.log(`[ocr] dropped a scrap at the photo's edge (no crop set): "${l.text}"`);
+    },
+  });
+  // Reading order only moves, cuts and joins lines; it never loses a word.
+  const wordsOut = countTokens(ordered);
+  console.log(
+    `[ocr] words: ${wordsIn} read, ${wordsOut} kept${dropped ? `, ${dropped} in edge scraps` : ''}` +
+      `${wordsOut + dropped !== wordsIn ? ' (MISMATCH)' : ''}; ${isHandwritten(ordered, width, height) ? 'handwriting' : 'print'}`
+  );
+  return { lines: ordered, width, height };
 }
+
+const countTokens = (lines: OcrLine[]) => lines.reduce((t, l) => t + (l.text.match(/\S+/g) ?? []).length, 0);
 
 /**
  * Reads each image and saves it as a page, into `docId` or a new document.
@@ -269,13 +287,13 @@ export function pageParagraphs(page: Page): OcrLine[][] {
 /** The words of an unedited page, ready to draw. Null once the person has edited it. */
 export function pageRuns(page: Page, clean: boolean): Run[] | null {
   if (page.editedText != null) return null;
-  return buildRuns(pageParagraphs(page), clean);
+  return buildRuns(pageParagraphs(page), clean, { handwritten: isHandwritten(page.lines, page.width || 1, page.height || 1) });
 }
 
 /** A page's text exactly as shown: their edit, or the recognized text, cleaned up or not. */
 export function pageText(page: Page, clean: boolean): string {
   if (page.editedText != null) return clean ? cleanText(page.editedText) : page.editedText;
-  return modelText(buildRuns(pageParagraphs(page), clean));
+  return modelText(buildRuns(pageParagraphs(page), clean, { handwritten: isHandwritten(page.lines, page.width || 1, page.height || 1) }));
 }
 
 /** The whole document as one text: pages in order, a blank line between. */

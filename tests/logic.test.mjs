@@ -184,7 +184,7 @@ const TRIP_UP = [
   'total $6.75',
 ];
 const tripUpLines = () => {
-  const sizes = [[520, 46], [560, 38], [760, 36], [600, 40], [590, 39], [300, 42], [290, 37], [300, 41]];
+  const sizes = [[520, 52], [560, 38], [760, 34], [600, 42], [590, 40], [300, 44], [290, 36], [300, 41]]; // capitals tallest, as written
   let y = 120;
   return TRIP_UP.map((t, i) => {
     const [w, h] = sizes[i];
@@ -204,6 +204,9 @@ test('clean up: the trip-up sheet keeps every line on its own, raw and cleaned u
   assert.deepEqual(T.modelText(T.buildRuns(paras, true)).split(/\n+/), fixed);
   assert.deepEqual(T.modelText(T.buildRuns(paras, false)).split(/\n+/), fixed);
   assert.deepEqual(T.cleanText(TRIP_UP.join('\n')).split('\n'), TRIP_UP);
+  // Build 4: the sheet counts as handwriting, so Clean up never joins its lines at all.
+  assert.equal(P.isHandwritten(ordered, W, H), true);
+  assert.deepEqual(T.modelText(T.buildRuns(paras, true, { handwritten: true })).split(/\n+/), fixed);
 });
 
 test('clean up: a price list stays three lines', () => {
@@ -430,7 +433,7 @@ test('fixes: the four cookbook fraction lines are never given an invented number
   // What Vision returns, as one token or in pieces, and what the app shows.
   const cases = [
     ['1 1/2 to 2 minutes', '1 ½ to 2 minutes'], // the digit was its own word on the page: kept
-    ['1/1\u20442 to 2 minutes', '1/1\u20442 to 2 minutes'], // pieces: shown as read, never "1/½"
+    ['1/1\u20442 to 2 minutes', '1/1/2 to 2 minutes'], // pieces: plain slashes, never "1/½" (build 4: never drawn as a neat fraction)
     ['11/2 to 2 minutes', '11/2 to 2 minutes'],
     ['1/4 TEASPOON', '¼ TEASPOON'],
     ['l¼ TEASPOON', 'l¼ TEASPOON'], // never "1¼"
@@ -814,6 +817,304 @@ test('reading order: a page turned more than 5 degrees is read along its text, u
   const flat = turned.map(({ corners, ...l }) => l);
   assert.notDeepEqual(P.orderLines(flat, 3024, 4032).map((l) => l.text), MAG_ORDER);
   assert.deepEqual(P.orderLines(turned, 3024, 4032).map((l) => l.text), MAG_ORDER);
+});
+
+// ---------- build 4: never lose a word ----------
+
+const tokens = (lines) => lines.reduce((t, l) => t + (l.text.match(/\S+/g) ?? []).length, 0);
+/**
+ * Words with boxes for a line of text drawn from (x, y) in pixels: `letter`
+ * px per character, one `letter` per space, and `extra` px more after the
+ * token at index `after` (a gutter, or a handwritten gap).
+ */
+const withWords = (text, { x, y, h = 30, letter = 16, iw = W, ih = H, after = -1, extra = 0, ...opts }) => {
+  const words = [];
+  let px = x;
+  for (const m of text.matchAll(/\S+/g)) {
+    const start = m.index;
+    const k = words.length;
+    words.push({ start, end: start + m[0].length, box: { x: px / iw, y: y / ih, width: (m[0].length * letter) / iw, height: h / ih } });
+    px += (m[0].length + 1) * letter + (k === after ? extra : 0);
+  }
+  const width = px - letter - x;
+  return { text, confidence: 1, alternatives: [], words, box: { x: x / iw, y: y / ih, width: width / iw, height: h / ih }, ...opts };
+};
+
+// Brian's trip-up sheet on build 3 (page found and flattened): "fox jumps"
+// vanished, leaving "the quick brown". Vision can return the two halves of
+// a handwritten line as separate boxes, or as one; neither may lose words.
+test('never lose a word: "fox jumps" as its own box beside "the quick brown" is kept, page found or not', () => {
+  const rows = tripUpLines();
+  const i = rows.findIndex((l) => l.text === 'the quick brown fox jumps');
+  const row = rows[i];
+  const left = { ...row, text: 'the quick brown', box: { ...row.box, width: 330 / W } };
+  const right = { ...row, text: 'fox jumps', box: { ...row.box, x: row.box.x + 400 / W, width: 200 / W } };
+  const lines = [...rows.slice(0, i), right, left, ...rows.slice(i + 1)];
+  for (const cropped of [true, false]) {
+    const out = P.readingOrder(lines, W, H, { cropped });
+    assert.equal(tokens(out), tokens(lines), `cropped ${cropped}`);
+    const text = out.map((l) => l.text).join('\n');
+    assert.ok(text.includes('the quick brown'), text);
+    assert.ok(text.includes('fox jumps'), text);
+    assert.ok(text.indexOf('the quick brown') < text.indexOf('fox jumps'));
+  }
+  // A line touching the photo's edge is never dropped when a page was found or a crop set.
+  const edge = [...lines, line('jumps over the lazy dog', { x: 0, y: 900, w: 300 })];
+  assert.equal(P.readingOrder(edge, W, H, { cropped: true }).length, P.orderLines(edge, W, H).length);
+});
+
+test('never lose a word: a second reading with fewer words, or a number run into a fraction, is ignored', () => {
+  const first = line('the quick buon fox jumps', { y: 100, confidence: 0.5 });
+  const shorter = { index: 0, text: 'the quick brown', confidence: 1, words: [], alternatives: [] };
+  assert.equal(A.mergeSecondPass([first], [shorter])[0].text, 'the quick buon fox jumps');
+  const better = { index: 0, text: 'the quick brown fox jumps', confidence: 1, words: [], alternatives: [] };
+  assert.equal(A.mergeSecondPass([first], [better])[0].text, 'the quick brown fox jumps');
+  const half = line('½ inch thick', { y: 100, confidence: 0.5 });
+  assert.equal(A.mergeSecondPass([half], [{ index: 0, text: '1½ inch thick', confidence: 1, words: [], alternatives: [] }])[0].text, '½ inch thick');
+  assert.equal(A.mergeSecondPass([half], [{ index: 0, text: '11/2 inch thick', confidence: 1, words: [], alternatives: [] }])[0].text, '½ inch thick');
+});
+
+test('never lose a word: only scraps touching the edge AND cut mid-word go, each one reported', () => {
+  const body = Array.from({ length: 6 }, (_, i) => line(`A full line of the article number ${i}`, { x: 300, y: ys(i), w: 600 }));
+  const scraps = [
+    line('iting and prime editing', { x: 0, y: ys(0), w: 200 }),
+    line('others are', { x: 0, y: ys(1), w: 120 }),
+    line('Whole Word At Edge.', { x: 0, y: ys(2), w: 210 }), // touches the edge but is not cut
+  ];
+  const dropped = [];
+  const kept = P.dropEdgeFragments([...body, ...scraps], W, H, (l) => dropped.push(l.text));
+  assert.deepEqual(dropped.sort(), ['iting and prime editing', 'others are']);
+  assert.ok(kept.some((l) => l.text === 'Whole Word At Edge.'));
+  assert.equal(tokens(kept) + dropped.reduce((t, d) => t + d.split(' ').length, 0), tokens([...body, ...scraps]));
+});
+
+// ---------- build 4: Clean up keeps handwritten lines ----------
+
+// Brian's trip-up sheet with Clean up on, build 3: lines 2 to 5 ran into one
+// paragraph ("the quick brown 1100 55 2z 8B 2z 6b 915-555-01423 brian.
+// H@exampe.com 34 cuP, 12 tsp, 350°F") because they are long. Handwriting
+// never joins, except a word split by a hyphen.
+const SHEET_B3 = ['the quick brown', '1100 55 2z 8B 2z 6b', '915-555-01423 brian. H@exampe.com', '34 cuP, 12 tsp, 350°F'];
+test('clean up: handwritten lines never join, however long; a word split by a hyphen still does', () => {
+  // Long lines (all over 85% of the widest), heights uneven: handwriting.
+  const sizes = [[640, 52], [700, 38], [760, 44], [700, 34]];
+  let y = 200;
+  const lines = SHEET_B3.map((t, i) => {
+    const l = line(t, { x: 100 + i * 6, y, w: sizes[i][0], h: sizes[i][1] });
+    y += sizes[i][1] + 10;
+    return l;
+  });
+  assert.equal(P.isHandwritten(lines, W, H), true);
+  const paras = P.groupParagraphs(lines, W, H).map((p) => p.lines);
+  assert.deepEqual(T.modelText(T.buildRuns(paras, true, { handwritten: true })).split(/\n+/), SHEET_B3);
+  // The same lines as print would join (the width rule), which is why the handwriting test matters.
+  assert.equal(T.joinPlan(sizes.map((s) => s[0]), SHEET_B3, 0).some(Boolean), true);
+  assert.deepEqual(T.joinPlan(sizes.map((s) => s[0]), SHEET_B3, 0, [], { handwritten: true }), [false, false, false]);
+  assert.deepEqual(T.joinPlan([700, 300], ['we picked a bunch of water-', 'cress by the creek'], 0, [], { handwritten: true }), [true]);
+  // Print keeps the build 3 rule; the cookbook body still joins.
+  assert.equal(P.isHandwritten(printed(COOKBOOK), W, H), false);
+});
+
+// ---------- build 4: columns ----------
+
+/** Columns of lines: `cols` is [x, width, [[text, y], ...]] in pixels. */
+const columns = (cols, opts = {}) => cols.flatMap(([x, w, rows]) => rows.map(([t, y, h = 30]) => withWords(t, { x, y, h, letter: Math.min(16, w / Math.max(8, t.length)), ...opts })));
+
+// The Anemones article from Brian's New Scientist page: column 1 read right,
+// but columns 2 and 3 and the red pull quote came out in chunks
+// ("...Modepalli and his", then "When the team bleached ... it was", then
+// back to "colleagues filmed them..."). The pull quote sits across the
+// gutter between columns 2 and 3 with space around it. Stand-in text.
+const ANEMONE_1 = ['Sea anemones can grow back', 'a whole body from a sliver,', 'and a team in India wanted', 'to know how they manage it.', 'They cut dozens of them up', 'and watched what happened.', 'Every piece grew a mouth', 'within a week or so of it.'];
+const ANEMONE_2_TOP = ['The animals were kept in', 'warm tanks at the lab, and', 'Modepalli and his'];
+const ANEMONE_2_BOTTOM = ['colleagues filmed them', 'day and night for a month', 'to see the order of events.'];
+const ANEMONE_3_TOP = ['When the team bleached', 'some of the animals first,', 'it was'];
+const ANEMONE_3_BOTTOM = ['much slower to heal, which', 'points to the algae living', 'inside their tissue.'];
+const ANEMONE_QUOTE = '"Every piece grew a new mouth"';
+const anemones = () => {
+  const at = (list, y0) => list.map((t, i) => [t, y0 + i * 48]);
+  const lines = columns([
+    [100, 560, at(ANEMONE_1, 300)],
+    [720, 560, [...at(ANEMONE_2_TOP, 300), ...at(ANEMONE_2_BOTTOM, 720)]],
+    [1340, 560, [...at(ANEMONE_3_TOP, 300), ...at(ANEMONE_3_BOTTOM, 720)]],
+  ], { iw: 2000, ih: 1400 });
+  // The pull quote, bigger, across the gutter between columns 2 and 3, centered right of it.
+  lines.push(withWords(ANEMONE_QUOTE, { x: 1000, y: 560, h: 60, letter: 30, iw: 2000, ih: 1400 }));
+  return lines.reverse();
+};
+
+test('columns: the Anemones article reads column by column; the pull quote never makes it jump', () => {
+  const out = P.readingOrder(anemones(), 2000, 1400, { cropped: true }).map((l) => l.text);
+  const col2 = [...ANEMONE_2_TOP, ...ANEMONE_2_BOTTOM];
+  const col3 = [...ANEMONE_3_TOP, ...ANEMONE_3_BOTTOM];
+  assert.deepEqual(out.slice(0, ANEMONE_1.length), ANEMONE_1);
+  assert.deepEqual(out.filter((t) => col2.includes(t)), col2);
+  assert.deepEqual(out.filter((t) => col3.includes(t)), col3);
+  // Column 2 is read in full before column 3 starts, and the quote sits in column 3 in its place.
+  assert.ok(out.indexOf(col2[col2.length - 1]) < out.indexOf(col3[0]), out.join(' | '));
+  assert.ok(out.indexOf(ANEMONE_3_TOP[2]) < out.indexOf(ANEMONE_QUOTE) && out.indexOf(ANEMONE_QUOTE) < out.indexOf(ANEMONE_3_BOTTOM[0]), out.join(' | '));
+  assert.equal(tokens(P.readingOrder(anemones(), 2000, 1400, { cropped: true })), tokens(anemones()));
+});
+
+// TIME's "Into the Breach" spread: Vision itself returned lines straight
+// across the gutter ("worked around the clock in Brussels, she hoped for
+// lead the European Commission. (The Commis-"), and page 2 came out as
+// alternating one-line fragments. Stand-in text around Brian's line.
+const TIME_LEFT = ['When the call came, she had', 'worked around the clock in', 'Brussels, she hoped for', 'a quiet week, and instead', 'she was asked to come and', 'help write the new rules.'];
+const TIME_RIGHT = ['lead the European Commission.', '(The Commis- sion is the', 'bloc\'s executive arm, and', 'its president sets the tone', 'for nearly everything else', 'the union does each year.'];
+const timeSpread = () => {
+  const lines = [];
+  TIME_LEFT.forEach((t, i) => {
+    const y = 300 + i * 50;
+    const r = TIME_RIGHT[i];
+    if (i % 3 !== 2) {
+      // Glued: one Vision line across the gutter, a wide gap between the two halves.
+      const n = t.split(' ').length;
+      lines.push(withWords(`${t} ${r}`, { x: 100, y, after: n - 1, extra: 560 - (t.length + 1) * 14 + 60, letter: 14 }));
+    } else {
+      lines.push(withWords(t, { x: 100, y, letter: 14 }));
+      lines.push(withWords(r, { x: 720, y, letter: 14 }));
+    }
+  });
+  return lines;
+};
+
+test('columns: lines Vision glued across the TIME gutter are cut apart; each column reads in full', () => {
+  const glued = timeSpread();
+  assert.ok(glued.some((l) => l.text.startsWith('worked around the clock in lead the European')) || glued.some((l) => l.text.includes('lead the European')));
+  const split = P.splitAtGutters(glued, W, H);
+  assert.equal(tokens(split), tokens(glued));
+  assert.ok(split.every((l) => !(TIME_LEFT.some((t) => l.text.startsWith(t)) && TIME_RIGHT.some((t) => l.text.endsWith(t)))), split.map((l) => l.text).join(' | '));
+  const out = P.readingOrder(glued, W, H, { cropped: true }).map((l) => l.text);
+  assert.deepEqual(out, [...TIME_LEFT, ...TIME_RIGHT]);
+  // A receipt's wide gaps before the prices are not a gutter.
+  const receipt = ['Coffee 4.50', 'Bagel 2.25', 'Total 6.75'].map((t, i) => withWords(t, { x: 100, y: 300 + i * 50, after: 0, extra: 500 }));
+  assert.deepEqual(P.splitAtGutters(receipt, W, H).map((l) => l.text), ['Coffee 4.50', 'Bagel 2.25', 'Total 6.75']);
+});
+
+// The ISS article as build 3 read it on the phone (perfect): title,
+// standfirst, byline, column 1, column 2, the photo caption, column 3.
+test('columns: the ISS article keeps its build 3 order with standfirst, byline and caption, every way in', () => {
+  const extra = (way) => {
+    const lines = spread({ ...way, scraps: false }).filter((l) => !MAG_COLUMNS[2].includes(l.text));
+    return lines;
+  };
+  void extra;
+  const iw = 2400;
+  const ih = 3200;
+  const rect = (t, x, y, w, h) => fromCorners(t, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], { iw, ih });
+  const lines = [
+    rect(MAG_TITLE, 300, 300, 1800, 90),
+    rect('Clocks in orbit will be compared with clocks on the ground', 300, 420, 1800, 46),
+    rect('Alex Wilkins', 300, 500, 400, 34),
+    ...MAG_COLUMNS[0].map((t, i) => rect(t, 300, 580 + i * 60, 680 - (i % 3) * 30, 40)),
+    ...MAG_COLUMNS[1].map((t, i) => rect(t, 1060, 580 + i * 60, 680 - (i % 3) * 30, 40)),
+    rect('The space station, where', 1820, 900, 600, 30),
+    rect('the clock will fly', 1820, 945, 400, 30),
+    ...MAG_COLUMNS[2].map((t, i) => rect(t, 1820, 1020 + i * 60, 560 - (i % 3) * 30, 40)),
+    rect(MAG_FOOTER, 300, 2900, 900, 34),
+  ];
+  const expected = [
+    MAG_TITLE,
+    'Clocks in orbit will be compared with clocks on the ground',
+    'Alex Wilkins',
+    ...MAG_COLUMNS[0],
+    ...MAG_COLUMNS[1],
+    'The space station, where',
+    'the clock will fly',
+    ...MAG_COLUMNS[2],
+    MAG_FOOTER,
+  ];
+  const shuffled = lines.map((l, i) => ({ l, k: (i * 7919) % 101 })).sort((a, b) => a.k - b.k).map((p) => p.l);
+  assert.deepEqual(P.readingOrder(shuffled, iw, ih, { cropped: true }).map((l) => l.text), expected);
+});
+
+test('never lose a word: reading order keeps every word on every fixture', () => {
+  const cases = [
+    ['dash list', visionList().map((l) => ({ ...l, box: P.flipVisionBox(l.box) })), 3024, 4032],
+    ['trip-up sheet', tripUpLines(), W, H],
+    ['cookbook', printed(COOKBOOK), W, H],
+    ['anemones', anemones(), 2000, 1400],
+    ['TIME', timeSpread(), W, H],
+    ...WAYS_IN.map((way) => [way.name, spread({ ...way, scraps: false }), way.iw, way.ih]),
+  ];
+  for (const [name, lines, iw, ih] of cases) {
+    assert.equal(tokens(P.orderLines(lines, iw, ih)), tokens(lines), name);
+    assert.equal(tokens(P.readingOrder(lines, iw, ih, { cropped: true })), tokens(lines), name);
+  }
+});
+
+// ---------- build 4: fractions in small type ----------
+
+// Brian's "grilled vegetables" page (cookbook p.166): "1/2 inch thick" set
+// as a small raised 1, a slash and a small lowered 2. Build 3 showed
+// "1½ inch thick" twice, "2 inch thick" twice, and "½ inch thick" once.
+test('fixes: grilled vegetables, a fraction in small type never becomes a mixed number like 1½', () => {
+  const cases = [
+    // [what Vision returned, confidence, what is shown, whether the number is underlined]
+    ['Cut the eggplant 11⁄2 inch thick', 0.5, 'Cut the eggplant 11/2 inch thick', true], // visibly odd, never drawn as 1½
+    ['Cut the squash 1¹/₂ inch thick', 0.5, 'Cut the squash 11/2 inch thick', true],
+    ['Cut the onions ¹⁄₂ inch thick', 1, 'Cut the onions ½ inch thick', false],
+    ['Cut the zucchini 2 inch thick', 1, 'Cut the zucchini 2 inch thick', false], // Vision lost the fraction: left alone
+    ['Cut the peppers 1½ inch thick', 0.5, 'Cut the peppers 1½ inch thick', true], // Vision's own reading, flagged
+  ];
+  for (const [vision, confidence, shown, flagged] of cases) {
+    const runs = T.buildRuns([[line(vision, { y: 100, confidence })]], false);
+    assert.equal(T.modelText(runs), shown, vision);
+    const number = runs.find((r) => T.isFractionLike(r.text) || /\d/.test(r.text));
+    assert.equal(number.unsure, flagged, vision);
+    // The app never adds a "1½" that Vision did not return.
+    if (!/\d[½¼¾]/.test(vision)) assert.equal(/\d[½¼¾⅓⅔⅛⅜⅝⅞]/.test(T.modelText(T.buildRuns([[line(vision, { y: 100, confidence })]], true))), false, vision);
+  }
+  // Only an explicit space makes a mixed number.
+  assert.equal(T.fixLine('1 1/2 inch thick'), '1 ½ inch thick');
+  assert.equal(T.fixLine('11/2 inch thick'), '11/2 inch thick');
+});
+
+// ---------- build 4: the slanted line, from its words ----------
+
+test('handwriting: the slanted line joins from its words when Vision gives it a level box', () => {
+  // "Bedford Hills on 6:40 train" climbs 20 degrees; Vision's box and corners are level (an upright box around it).
+  const a = (-20 * Math.PI) / 180;
+  const words = [];
+  const text = 'Bedford Hills on 6:40 train';
+  let along = 0;
+  for (const m of text.matchAll(/\S+/g)) {
+    const len = m[0].length * 18;
+    const cx = 330 + (along + len / 2) * Math.cos(a);
+    const cy = 700 + (along + len / 2) * Math.sin(a);
+    words.push({ start: m.index, end: m.index + m[0].length, box: { x: (cx - len / 2) / W, y: (cy - 20) / H, width: len / W, height: 40 / H } });
+    along += len + 18;
+  }
+  const xs = words.flatMap((w) => [w.box.x, w.box.x + w.box.width]);
+  const yv = words.flatMap((w) => [w.box.y, w.box.y + w.box.height]);
+  const box = { x: Math.min(...xs), y: Math.min(...yv), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...yv) - Math.min(...yv) };
+  const long = { text, confidence: 1, alternatives: [], words, box, corners: [box.x, box.y, box.x + box.width, box.y, box.x + box.width, box.y + box.height, box.x, box.y + box.height] };
+  const leaving = line('Leaving', { x: 100, y: 735, w: 140, h: 40 });
+  const forWord = line('for', { x: 255, y: 712, w: 55, h: 30 });
+  const level = (t, y) => line(t, { x: 100, y, w: 500, h: 40 });
+  const lines = [level('Monday Oct 23', 300), long, level('Back by Sunday', 900), forWord, level('Call the bank about the card', 400), leaving, level('Feed the cat', 1000)];
+  const out = P.orderLines(lines, W, H).map((l) => l.text);
+  assert.deepEqual(out, ['Monday Oct 23', 'Call the bank about the card', 'Leaving for Bedford Hills on 6:40 train', 'Back by Sunday', 'Feed the cat']);
+});
+
+// ---------- build 4: the document reader (iOS 26) ----------
+
+test('document reader: its reading order, paragraphs and wraps are used as they come', () => {
+  // Lines placed so geometry alone would read them across, with Vision's order down each column.
+  const mk = (text, x, y, order, para, wraps) => ({ ...line(text, { x, y, w: 380 }), order, para, ...(wraps != null ? { wraps } : {}) });
+  const lines = [
+    mk('right column top line', 560, 100, 2, 1, true),
+    mk('left column top line', 60, 100, 0, 0, true),
+    mk('right column ends here.', 560, 142, 3, 1, false),
+    mk('left column ends here.', 60, 142, 1, 0, false),
+    mk('- a list item', 60, 300, 4, -1),
+  ];
+  const out = P.readingOrder(lines, W, H, { cropped: true });
+  assert.deepEqual(out.map((l) => l.text), ['left column top line', 'left column ends here.', 'right column top line', 'right column ends here.', '- a list item']);
+  const paras = P.groupParagraphs(out, W, H).map((p) => p.lines);
+  assert.equal(paras.length, 3);
+  assert.equal(T.modelText(T.buildRuns(paras, true)), 'left column top line left column ends here.\n\nright column top line right column ends here.\n\n- a list item');
 });
 
 // ---------- focus and blur (build 2) ----------

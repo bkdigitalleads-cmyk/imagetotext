@@ -90,16 +90,45 @@ function shapeOf(line: OcrLine, w: number, h: number): Shape {
     const p = [0, 2, 4, 6].map((i) => ({ x: c[i] * w, y: c[i + 1] * h }));
     const [tl, tr, br, bl] = p;
     const d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(b.x - a.x, b.y - a.y);
-    return {
+    const shape = {
       cx: (tl.x + tr.x + br.x + bl.x) / 4,
       cy: (tl.y + tr.y + br.y + bl.y) / 4,
       length: (d(tl, tr) + d(bl, br)) / 2,
       height: (d(tl, bl) + d(tr, br)) / 2,
       angle: Math.atan2(tr.y - tl.y + (br.y - bl.y), tr.x - tl.x + (br.x - bl.x)),
     };
+    // Level corners around slanted writing: the words tell the angle.
+    return Math.abs(shape.angle) < (SKEW_MIN_DEGREES * Math.PI) / 180 ? wordSlant(line, shape, w, h) ?? shape : shape;
   }
   const b = line.box;
-  return { cx: (b.x + b.width / 2) * w, cy: (b.y + b.height / 2) * h, length: b.width * w, height: b.height * h, angle: 0 };
+  const flat = { cx: (b.x + b.width / 2) * w, cy: (b.y + b.height / 2) * h, length: b.width * w, height: b.height * h, angle: 0 };
+  return wordSlant(line, flat, w, h) ?? flat;
+}
+
+/**
+ * A line written at a slant whose box (and corners) Vision returned level:
+ * the angle from its word boxes (a straight-line fit through their
+ * centers, at least three words), with the height of one word instead of
+ * the slanted box's. Null when the words run level (under SKEW_MIN_DEGREES).
+ */
+function wordSlant(line: OcrLine, s: Shape, w: number, h: number): Shape | null {
+  const words = line.words.filter((wd) => wd.box && wd.box.width > 0 && wd.box.height > 0);
+  if (words.length < 3) return null;
+  const pts = words.map((wd) => ({ x: (wd.box.x + wd.box.width / 2) * w, y: (wd.box.y + wd.box.height / 2) * h }));
+  const mx = pts.reduce((t, p) => t + p.x, 0) / pts.length;
+  const my = pts.reduce((t, p) => t + p.y, 0) / pts.length;
+  let sxx = 0;
+  let sxy = 0;
+  for (const p of pts) {
+    sxx += (p.x - mx) ** 2;
+    sxy += (p.x - mx) * (p.y - my);
+  }
+  if (!(sxx > 0)) return null;
+  const angle = Math.atan(sxy / sxx);
+  if (Math.abs(angle) < (SKEW_MIN_DEGREES * Math.PI) / 180) return null;
+  const cos = Math.cos(angle);
+  const wordH = median(words.map((wd) => wd.box.height * h));
+  return { cx: s.cx, cy: s.cy, length: s.length / cos, height: Math.max(1, Math.min(wordH, s.height)), angle };
 }
 
 /**
@@ -193,42 +222,57 @@ interface Item {
 }
 
 /**
- * Pieces of a line written at a slant that Vision split apart, joined:
- * starting from a piece whose own angle differs from the page's by more
- * than SKEW_MIN_DEGREES, the next pieces to its right whose centers sit
- * within half a line height of its line, with gaps under two line heights.
- * Level text is left alone here (it is joined row by row later), so lines
- * of neighbouring columns never run together.
+ * Pieces of a line written at a slant that Vision split apart, joined.
+ * From each piece whose own angle (from its corners, or its words) differs
+ * from the page's by more than SKEW_MIN_DEGREES, longest first, the
+ * nearest pieces to its right and to its left whose centers sit within
+ * half a line height of its line, with gaps under two line heights, are
+ * added until none is left ("Leaving" + "for" + "Bedford Hills on 6:40
+ * train"). Level text is left alone here (it is joined row by row later),
+ * so lines of neighbouring columns never run together. Every word is kept.
  */
 function joinSlanted(items: Item[], w: number, h: number, theta: number): Item[] {
   const limit = (SKEW_MIN_DEGREES * Math.PI) / 180;
   const used = new Set<Item>();
   const out: Item[] = [];
-  const byLeft = [...items].sort((a, b) => a.g.left - b.g.left);
-  for (const start of byLeft) {
-    if (used.has(start)) continue;
-    used.add(start);
-    if (Math.abs(start.g.angle - theta) <= limit) {
-      out.push(start);
-      continue;
-    }
-    let line = start.line;
-    let end = start.g;
-    const slope = Math.tan(start.g.angle - theta);
-    const lineH = start.g.height;
-    for (const next of byLeft) {
-      if (used.has(next) || next.g.left < end.right - 0.5 * lineH) continue;
-      const gap = next.g.left - end.right;
-      const expectedY = start.g.cy + slope * (next.g.cx - start.g.cx);
-      if (gap < 2 * lineH && Math.abs(next.g.cy - expectedY) < 0.5 * lineH) {
+  const seeds = items.filter((i) => Math.abs(i.g.angle - theta) > limit).sort((a, b) => b.g.length - a.g.length);
+  for (const seed of seeds) {
+    if (used.has(seed)) continue;
+    used.add(seed);
+    const slope = Math.tan(seed.g.angle - theta);
+    const lineH = seed.g.height;
+    const onLine = (i: Item) => Math.abs(i.g.cy - (seed.g.cy + slope * (i.g.cx - seed.g.cx))) < 0.5 * lineH;
+    const parts = [seed];
+    for (let grew = true; grew; ) {
+      grew = false;
+      const last = parts[parts.length - 1].g;
+      const next = items
+        .filter((i) => !used.has(i) && i.g.left >= last.right - 0.5 * lineH && i.g.left - last.right < 2 * lineH && onLine(i))
+        .sort((a, b) => a.g.left - b.g.left)[0];
+      if (next) {
         used.add(next);
-        line = joinLine(line, next.line);
-        end = next.g;
+        parts.push(next);
+        grew = true;
+      }
+      const first = parts[0].g;
+      const prev = items
+        .filter((i) => !used.has(i) && i.g.right <= first.left + 0.5 * lineH && first.left - i.g.right < 2 * lineH && onLine(i))
+        .sort((a, b) => b.g.right - a.g.right)[0];
+      if (prev) {
+        used.add(prev);
+        parts.unshift(prev);
+        grew = true;
       }
     }
+    if (parts.length === 1) {
+      out.push(seed);
+      continue;
+    }
+    let line = parts[0].line;
+    for (let k = 1; k < parts.length; k++) line = joinLine(line, parts[k].line);
     out.push({ line, g: geoOf(line, w, h, theta) });
   }
-  return out;
+  return [...out, ...items.filter((i) => !used.has(i))];
 }
 
 /**
@@ -293,11 +337,82 @@ function cutBlocks(items: Item[], lineH: number): Item[][] {
   if (v != null) {
     return [...cutBlocks(items.filter((i) => i.g.right <= v), lineH), ...cutBlocks(items.filter((i) => i.g.left >= v), lineH)];
   }
+  const strips = stripCut(items, lineH);
+  if (strips) return strips.flatMap((block) => cutBlocks(block, lineH));
   const hz = horizontalCut(items);
   if (hz != null) {
     return [...cutBlocks(items.filter((i) => i.g.bottom <= hz), lineH), ...cutBlocks(items.filter((i) => i.g.top >= hz), lineH)];
   }
   return [items];
+}
+
+/**
+ * Columns as whole vertical strips, when a few lines cross the gutter (a
+ * pull quote set across two columns, a line Vision glued across it, a
+ * footer): the leftmost gutter at least `0.6 lineH` wide with three or more
+ * lines on each side, side by side, crossed by at most two lines (or 15%).
+ * Bands at the top and bottom that do not have text on both sides of it
+ * (a title, a standfirst, a byline, a footer) come before and after; a
+ * line crossing it in the middle goes to the strip that holds its middle,
+ * in its place there. Each strip is then read top to bottom, so a pull
+ * quote or a gap inside a column never makes the reading jump columns. A
+ * line across nearly the whole width in the middle (a heading between two
+ * stories) is left to the horizontal cut instead. Null when there is no
+ * such gutter, or the two sides make a table.
+ */
+function stripCut(items: Item[], lineH: number): Item[][] | null {
+  const n = items.length;
+  if (n < 6) return null;
+  const minGap = 0.6 * lineH;
+  const regionLeft = Math.min(...items.map((i) => i.g.left));
+  const regionWidth = Math.max(...items.map((i) => i.g.right)) - regionLeft;
+  const xs = [...new Set(items.map((i) => i.g.right))].sort((a, b) => a - b);
+  for (const x of xs) {
+    const L = new Set(items.filter((i) => i.g.right <= x + 0.25 * minGap));
+    const R = new Set(items.filter((i) => i.g.left >= x + minGap));
+    const C = items.filter((i) => !L.has(i) && !R.has(i));
+    if (L.size < 3 || R.size < 3 || C.length > Math.max(2, Math.ceil(0.15 * n))) continue;
+    const left = [...L];
+    const right = [...R];
+    const band = (list: Item[]) => [Math.min(...list.map((i) => i.g.top)), Math.max(...list.map((i) => i.g.bottom))];
+    const [lt, lb] = band(left);
+    const [rt, rb] = band(right);
+    if (Math.min(lb, rb) - Math.max(lt, rt) < 0.5 * Math.min(lb - lt, rb - rt)) continue; // not side by side
+    const aligned = right.filter((r) => left.some((l) => sameRow(l.g, r.g))).length / right.length;
+    const lw = median(left.map((i) => i.g.length));
+    const rw = median(right.map((i) => i.g.length));
+    const figures = right.filter((i) => /\d/.test(i.line.text)).length / right.length;
+    if (aligned >= 0.6 && (rw < 0.6 * lw || figures >= 0.6)) continue; // a table
+    // Bands of lines with no empty space between them, top to bottom.
+    const bands: Item[][] = [];
+    let reach = -Infinity;
+    for (const it of [...items].sort((a, b) => a.g.top - b.g.top)) {
+      if (bands.length > 0 && it.g.top < reach) {
+        bands[bands.length - 1].push(it);
+        reach = Math.max(reach, it.g.bottom);
+      } else {
+        bands.push([it]);
+        reach = it.g.bottom;
+      }
+    }
+    const mid = x + minGap / 2;
+    const onLeft = (i: Item) => L.has(i) || (!R.has(i) && i.g.cx < mid);
+    const twoSided = (b: Item[]) => b.some(onLeft) && b.some((i) => !onLeft(i));
+    let top = 0;
+    while (top < bands.length && !twoSided(bands[top])) top++;
+    let bottom = bands.length;
+    while (bottom > top && !twoSided(bands[bottom - 1])) bottom--;
+    if (top >= bottom) continue;
+    const head = bands.slice(0, top).flat();
+    const foot = bands.slice(bottom).flat();
+    const middle = bands.slice(top, bottom).flat();
+    const crossers = middle.filter((i) => !L.has(i) && !R.has(i));
+    if (crossers.some((i) => i.g.right - i.g.left >= 0.85 * regionWidth)) return null;
+    const leftStrip = middle.filter(onLeft);
+    const rightStrip = middle.filter((i) => !onLeft(i));
+    return [head, leftStrip, rightStrip, foot].filter((b) => b.length > 0);
+  }
+  return null;
 }
 
 /** Lines in one block, top to bottom in rows, each row left to right. */
@@ -313,7 +428,8 @@ function rowsInOrder(items: Item[]): Item[] {
 }
 
 /**
- * Reading order, whatever order Vision returned: columns left to right,
+ * Reading order, whatever order Vision returned: lines glued across a
+ * column gutter cut apart first, then columns left to right,
  * top to bottom within a column, a title across the columns before them,
  * along the text's own axis when the page is turned. Slanted pieces of one
  * line are joined first; pieces of one row with a gap under about one and a
@@ -322,7 +438,7 @@ function rowsInOrder(items: Item[]): Item[] {
 export function orderLines(lines: OcrLine[], width = 1, height = 1): OcrLine[] {
   if (lines.length === 0) return [];
   const theta = pageAngle(lines, width, height);
-  let items: Item[] = lines.map((line) => ({ line, g: geoOf(line, width, height, theta) }));
+  let items: Item[] = splitAtGutters(lines, width, height).map((line) => ({ line, g: geoOf(line, width, height, theta) }));
   items = joinSlanted(items, width, height, theta);
   const lineH = median(items.map((i) => i.g.height)) || 1;
   const out: OcrLine[] = [];
@@ -349,11 +465,15 @@ export function orderLines(lines: OcrLine[], width = 1, height = 1): OcrLine[] {
 
 /**
  * Lines from the edge of a facing page (a magazine spread shot without a
- * crop): a narrow block of lines touching the left or right edge of the
- * photo, most of which start or end in the middle of a word. Only used when
- * no crop was set; the main text is never touched.
+ * crop). A line is dropped only when all of these hold: it touches the
+ * left or right edge of the photo, it is itself cut mid-word on that side
+ * (starts mid-word on the left, ends mid-word on the right), it sits in a
+ * block of edge lines narrower than three quarters of the main lines, and
+ * at least half of that block is cut mid-word too. Never used when a page
+ * was found or a crop was set (see `readingOrder`). Every drop is reported
+ * to `onDrop` (logged by the app).
  */
-export function dropEdgeFragments(lines: OcrLine[], width = 1, height = 1): OcrLine[] {
+export function dropEdgeFragments(lines: OcrLine[], width = 1, height = 1, onDrop?: (line: OcrLine) => void): OcrLine[] {
   if (lines.length < 3) return lines;
   const edge = 0.01;
   const touchesLeft = (l: OcrLine) => l.box.x <= edge;
@@ -364,29 +484,151 @@ export function dropEdgeFragments(lines: OcrLine[], width = 1, height = 1): OcrL
   const startsMidWord = (t: string) => /^\s*(?:\p{Ll}|\p{L}{1,3}['’]s?\s)/u.test(t);
   const endsMidWord = (t: string) => /[\p{L}-]$/u.test(t.trim());
   const drop = new Set<OcrLine>();
-  for (const [side, test, midWord] of [
-    ['left', touchesLeft, startsMidWord],
-    ['right', touchesRight, endsMidWord],
+  for (const [test, midWord] of [
+    [touchesLeft, startsMidWord],
+    [touchesRight, endsMidWord],
   ] as const) {
-    void side;
     const block = lines.filter(test);
     if (block.length === 0) continue;
     const narrow = median(block.map((l) => l.box.width * width)) < 0.75 * mainWidth;
-    const cut = block.filter((l) => midWord(l.text)).length / block.length;
-    if (narrow && cut >= 0.5) block.forEach((l) => drop.add(l));
+    const cut = block.filter((l) => midWord(l.text));
+    if (narrow && cut.length / block.length >= 0.5) cut.forEach((l) => drop.add(l));
   }
   void height;
-  return drop.size ? lines.filter((l) => !drop.has(l)) : lines;
+  if (drop.size === 0) return lines;
+  drop.forEach((l) => onDrop?.(l));
+  return lines.filter((l) => !drop.has(l));
 }
+
+// ---------- lines Vision glued across a column gutter ----------
+
+/** A gap between two words this many times the page's usual word gap may be a column gutter. */
+export const GUTTER_GAP = 2.5;
+
+const tokenCount = (t: string) => (t.match(/\S+/g) ?? []).length;
+
+/** A line's words with boxes, in reading order. */
+function boxedWords(line: OcrLine) {
+  return line.words.filter((wd) => wd.box && wd.box.width > 0).sort((a, b) => a.start - b.start);
+}
+
+/** The line cut into pieces at these character positions (each at a space). Every word is kept. */
+function splitLine(line: OcrLine, cuts: number[]): OcrLine[] {
+  const text = line.text;
+  const bounds = [0, ...cuts, text.length];
+  const tokens = [...text.matchAll(/\S+/g)].map((m) => m.index ?? 0);
+  const out: OcrLine[] = [];
+  const c = line.corners && line.corners.length === 8 ? line.corners : null;
+  for (let k = 0; k < bounds.length - 1; k++) {
+    let a = bounds[k];
+    let b = bounds[k + 1];
+    while (a < b && /\s/.test(text[a])) a++;
+    while (b > a && /\s/.test(text[b - 1])) b--;
+    if (a >= b) continue;
+    const words = line.words.filter((wd) => wd.start >= a && wd.start < b).map((wd) => ({ ...wd, start: wd.start - a, end: Math.min(wd.end, b) - a }));
+    const boxes = words.map((wd) => wd.box).filter((bx) => bx && bx.width > 0);
+    const x0 = boxes.length ? Math.min(...boxes.map((bx) => bx.x)) : line.box.x;
+    const x1 = boxes.length ? Math.max(...boxes.map((bx) => bx.x + bx.width)) : line.box.x + line.box.width;
+    const firstToken = tokens.findIndex((t) => t >= a);
+    const lastToken = tokens.length - 1 - [...tokens].reverse().findIndex((t) => t < b);
+    const piece: OcrLine = {
+      text: text.slice(a, b),
+      confidence: line.confidence,
+      box: { x: x0, y: line.box.y, width: x1 - x0, height: line.box.height },
+      words,
+      alternatives: [],
+    };
+    if (c) {
+      const t0 = line.box.width > 0 ? (x0 - line.box.x) / line.box.width : 0;
+      const t1 = line.box.width > 0 ? (x1 - line.box.x) / line.box.width : 1;
+      const lerp = (i: number, j: number, t: number) => [c[i] + (c[j] - c[i]) * t, c[i + 1] + (c[j + 1] - c[i + 1]) * t];
+      piece.corners = [...lerp(0, 2, t0), ...lerp(0, 2, t1), ...lerp(6, 4, t1), ...lerp(6, 4, t0)];
+    }
+    if (line.firstConfidence != null) piece.firstConfidence = line.firstConfidence;
+    if (line.unknown) piece.unknown = line.unknown.filter((u) => u >= firstToken && u <= lastToken).map((u) => u - firstToken);
+    out.push(piece);
+  }
+  return out;
+}
+
+/**
+ * Lines Vision read straight across a column gutter ("worked around the
+ * clock in Brussels, she hoped for lead the European Commission."), cut
+ * apart before the columns are found. A gutter is an x position that wide
+ * gaps between words (more than GUTTER_GAP times the page's median word
+ * gap) contain on at least two lines, and that fewer other lines run a
+ * word across. Each line is cut at every wide gap holding a gutter. A
+ * table (the right-hand pieces mostly figures, or a word or so each, like
+ * a receipt's prices) is left alone. Every word is kept.
+ */
+export function splitAtGutters(lines: OcrLine[], width = 1, height = 1): OcrLine[] {
+  void height;
+  const gaps: { li: number; at: number; left: number; right: number }[] = [];
+  const all: number[] = [];
+  lines.forEach((line, li) => {
+    const ws = boxedWords(line);
+    for (let k = 1; k < ws.length; k++) {
+      const left = (ws[k - 1].box.x + ws[k - 1].box.width) * width;
+      const right = ws[k].box.x * width;
+      if (right - left > 0) all.push(right - left);
+      // Cut at the last space before the right-hand word.
+      const at = line.text.slice(0, ws[k].start).search(/\s+\S*$/);
+      if (at > 0) gaps.push({ li, at, left, right });
+    }
+  });
+  const usual = median(all);
+  if (!(usual > 0)) return lines;
+  const wide = gaps.filter((g) => g.right - g.left > GUTTER_GAP * usual);
+  if (wide.length < 2) return lines;
+  const tol = Math.max(usual, 0.01 * width);
+  const gutters: number[] = [];
+  const candidates = wide.map((g) => (g.left + g.right) / 2);
+  const scored = candidates
+    .map((x) => {
+      const holding = wide.filter((g) => g.left - tol <= x && x <= g.right + tol);
+      const lineSet = new Set(holding.map((g) => g.li));
+      const crossing = lines.filter((l, li) => !lineSet.has(li) && boxedWords(l).some((wd) => wd.box.x * width < x && (wd.box.x + wd.box.width) * width > x)).length;
+      return { x, holding, support: lineSet.size, crossing };
+    })
+    .filter((c) => c.support >= 2 && c.support > c.crossing)
+    .sort((a, b) => b.support - a.support);
+  const cutsByLine = new Map<number, number[]>();
+  for (const c of scored) {
+    if (gutters.some((g) => Math.abs(g - c.x) < 4 * tol)) continue;
+    // A table, not columns: what follows the gap is figures or a word or two.
+    const rights = c.holding.map((g) => lines[g.li].text.slice(g.at).trim());
+    const lefts = c.holding.map((g) => lines[g.li].text.slice(0, g.at).trim());
+    const figures = rights.filter((t) => /^[\d\s$€£.,:%/-]+$/.test(t)).length / rights.length;
+    if (figures >= 0.6 || median(rights.map(tokenCount)) < 2 || median(lefts.map(tokenCount)) < 2) continue;
+    gutters.push(c.x);
+    for (const g of c.holding) cutsByLine.set(g.li, [...(cutsByLine.get(g.li) ?? []), g.at]);
+  }
+  if (cutsByLine.size === 0) return lines;
+  return lines.flatMap((line, li) => {
+    const cuts = cutsByLine.get(li);
+    return cuts ? splitLine(line, [...new Set(cuts)].sort((a, b) => a - b)) : [line];
+  });
+}
+
+// ---------- the reading order of a page ----------
 
 /**
  * The lines of one page in reading order, the same for every way a page
  * comes in (camera with or without a found page, a photo, a file, a PDF
- * page): scraps of a facing page dropped when no crop was set, then
- * `orderLines`.
+ * page). Scraps of a facing page are dropped only when no crop was set
+ * (each one reported to `onDrop`). Lines from the document reader (iOS 26
+ * and later) come in Vision's own reading order and keep it; the others go
+ * through `orderLines`.
  */
-export function readingOrder(lines: OcrLine[], width: number, height: number, opts: { cropped: boolean }): OcrLine[] {
-  return orderLines(opts.cropped ? lines : dropEdgeFragments(lines, width, height), width, height);
+export function readingOrder(
+  lines: OcrLine[],
+  width: number,
+  height: number,
+  opts: { cropped: boolean; onDrop?: (line: OcrLine) => void }
+): OcrLine[] {
+  const kept = opts.cropped ? lines : dropEdgeFragments(lines, width, height, opts.onDrop);
+  if (kept.length > 0 && kept.every((l) => typeof l.order === 'number')) return [...kept].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return orderLines(kept, width, height);
 }
 
 // ---------- paragraphs ----------
@@ -400,7 +642,22 @@ export function looksPrinted(heights: number[]): boolean {
   return close / heights.length >= 0.8;
 }
 
-/** Lines in reading order to paragraphs. */
+/**
+ * Handwriting, for Clean up: the line heights vary more than print's (fewer
+ * than 80% of them within PRINT_HEIGHT_SPREAD of the median). Vision's
+ * line reader does not say whether text is handwritten, so this is the test.
+ */
+export function isHandwritten(lines: OcrLine[], width = 1, height = 1): boolean {
+  if (lines.length < 2) return false;
+  const theta = pageAngle(lines, width, height);
+  return !looksPrinted(lines.map((l) => geoOf(l, width, height, theta).height));
+}
+
+/**
+ * Lines in reading order to paragraphs. Lines from the document reader
+ * (iOS 26) keep Vision's own paragraphs; list items and loose lines, and
+ * every line from the line reader, are grouped from their geometry.
+ */
 export function groupParagraphs(lines: OcrLine[], width = 1, height = 1): Paragraph[] {
   if (lines.length === 0) return [];
   const theta = pageAngle(lines, width, height);
@@ -427,8 +684,13 @@ export function groupParagraphs(lines: OcrLine[], width = 1, height = 1): Paragr
     // with no closing punctuation.
     const continuation = b.left > left && /^\p{Ll}/u.test(text) && !/[.!?:;]$/.test(prevText) && gap < gapLimit;
 
-    const breakHere =
-      gap >= gapLimit || // more space than lines of one paragraph have (relative to this page's writing)
+    const pa = lines[i - 1].para;
+    const pb = lines[i].para;
+    const fromDocument = pa != null && pb != null && pa >= 0 && pb >= 0;
+
+    const breakHere = fromDocument
+      ? pa !== pb || LIST_MARKER.test(lines[i].text)
+      : gap >= gapLimit || // more space than lines of one paragraph have (relative to this page's writing)
       b.top < a.top - 0.5 * h || // went back up: another column or block
       ratio > 1.45 || // a heading and its text
       LIST_MARKER.test(lines[i].text) || // a new list item

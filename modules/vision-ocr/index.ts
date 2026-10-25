@@ -15,5 +15,5 @@ export {
   unknownWords,
   OcrUnavailableError,
 } from './src/VisionOcrModule';
-export { dropEdgeFragments, flipVisionBox, groupParagraphs, LIST_MARKER, orderLines, PARAGRAPH_GAP, paragraphText, readingOrder } from './src/paragraphs';
+export { dropEdgeFragments, flipVisionBox, groupParagraphs, isHandwritten, LIST_MARKER, orderLines, PARAGRAPH_GAP, paragraphText, readingOrder, splitAtGutters } from './src/paragraphs';
 export type { Paragraph } from './src/paragraphs';
