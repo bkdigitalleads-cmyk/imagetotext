@@ -500,41 +500,138 @@ test('second pass: a more confident reading replaces the text and words, the lin
 
 // ---------- the nudge (build 2) ----------
 
-test('nudge: shows when more than 10% of the words are on unsure lines', () => {
-  const good = Array.from({ length: 9 }, (_, i) => line('one two three four five', { y: i * 50, confidence: 0.9 }));
-  assert.equal(A.shouldNudge([...good, line('six seven eight nine ten', { y: 600, confidence: 0.5 })]), false); // exactly 10%
-  assert.equal(A.shouldNudge([...good, line('six seven eight nine ten eleven', { y: 600, confidence: 0.5 })]), true);
+test('nudge: over 15% of the counted words unsure AND at least 3 of them; markers, numbers, single letters not counted', () => {
+  assert.equal(A.NUDGE_UNSURE_SHARE, 0.15);
+  assert.equal(A.NUDGE_MIN_UNSURE, 3);
+  // 20 counted words on lines read at 0.5; `k` of them garbled (not in the dictionary).
+  const page = (k) =>
+    Array.from({ length: 4 }, (_, i) => ({ ...line('alpha bravo charlie delta echo', { y: i * 50, confidence: 0.5 }), unknown: [0, 1, 2, 3, 4].filter((j) => i * 5 + j < k) }));
+  assert.equal(A.shouldNudge(page(3)), false); // exactly 15%
+  assert.equal(A.shouldNudge(page(4)), true);
+  const two = [{ ...line('two odd wurds hree', { y: 0, confidence: 0.5 }), unknown: [2, 3] }];
+  assert.equal(A.nudgeCounts(two).share, 0.5);
+  assert.equal(A.shouldNudge(two), false); // half, but only 2
   assert.equal(A.shouldNudge([]), false);
-  assert.equal(A.unsureShare([line('- , .', { y: 0, confidence: 0.1 }), line('word', { y: 50, confidence: 0.9 })]), 0); // punctuation is not a word
+  // Low confidence alone is not enough, and neither is an unknown word Vision was sure of.
+  assert.equal(A.shouldNudge([{ ...line('qwz vbn mkl pty', { y: 0, confidence: 1 }), unknown: [0, 1, 2, 3] }]), false);
+  assert.equal(A.shouldNudge([line('every word here is fine and right', { y: 0, confidence: 0.3 })]), false);
+  // What counts: markers, single characters, numbers and punctuation are left out.
+  assert.equal(A.nudgeWordKind('-', false), 'skip');
+  assert.equal(A.nudgeWordKind('a)', false), 'skip');
+  assert.equal(A.nudgeWordKind('[x]', false), 'skip');
+  assert.equal(A.nudgeWordKind('$4.50', false), 'skip');
+  assert.equal(A.nudgeWordKind('915-555-0142,', false), 'skip');
+  assert.equal(A.nudgeWordKind('Milk', false), 'word');
+  assert.equal(A.nudgeWordKind("Ana's", false), 'word');
+  assert.equal(A.nudgeWordKind('well-known', false), 'word');
+  assert.equal(A.nudgeWordKind('brian.k@example.com', false), 'word');
+  assert.equal(A.nudgeWordKind('buon', true), 'odd');
+  assert.equal(A.nudgeWordKind('2z', false), 'odd');
+  assert.equal(A.nudgeWordKind('8B', false), 'odd');
 });
 
-// Build 2's note never showed on the phone: Vision's confidence there is
-// coarse (1.0, 0.5, 0.3), and the second pass lifted most low lines to 1.0
-// before the note was decided. Now the first look counts, and so do words
-// the phone's dictionary does not know where Vision was not fully sure.
-test('nudge: shows for the magazine spread and a blurry photo, not for a straight cookbook shot', () => {
-  // Magazine: a third of the lines were read at 0.5 first, then lifted to 1.0 by the second pass.
-  const magazine = MAG_ORDER.map((t, i) => ({ ...line(t, { y: i * 50 }), ...(i % 3 === 1 ? { firstConfidence: 0.5 } : {}) }));
+// Build 4 showed the note on almost every handwritten scan, clean ones too.
+// Brian's sharp, flat Groceries list (every word right) must not get it;
+// the trip-up sheet and the New Scientist spread must.
+test('nudge: no note on the clean Groceries list or a This Week list; a note on the trip-up sheet and the magazine spread', () => {
+  // Handwriting is often read at 0.5 at the first look even when every word is right.
+  const hand = (texts, unknown = {}) => texts.map((t, i) => ({ ...line(t, { y: i * 60, confidence: 1 }), firstConfidence: 0.5, unknown: unknown[i] ?? [] }));
+  const groceries = hand(['Groceries', '- Milk', '- Eggs', '- Coffee', '- Apples', '- Bread', '- Olive Oil']);
+  assert.equal(A.shouldNudge(groceries), false);
+  assert.equal(A.nudgeCounts(groceries).unsure, 0);
+  const week = hand(['This Week', 'Mon - dentist 3pm', 'Tue - call Sam', 'Wed - gym', "Thu - Ana's party", 'Fri - pay rent']);
+  assert.equal(A.shouldNudge(week), false); // "3pm" alone is not enough
+  // The trip-up sheet as build 2 and 3 read it, the garbled lines at 0.5 (dictionary flags as the phone would).
+  const tripUp = [
+    { ...line('THE QUICK BROWN FOX', { y: 0 }) },
+    { ...line('the quick buon fox jumps', { y: 60, confidence: 0.5 }), unknown: [2] },
+    { ...line('1100 55 2z 8B 2z 6b', { y: 120, confidence: 0.5 }), unknown: [] },
+    { ...line('915-555-01423 brian. H@exampe.com', { y: 180, confidence: 0.5 }), unknown: [1] },
+    { ...line('34 cuP, 12 tsp, 350°F', { y: 240, confidence: 0.5 }), unknown: [1, 3] },
+    { ...line('bring the red blue folder', { y: 300 }) },
+    { ...line('coffe $4.50', { y: 360 }), unknown: [0] },
+    { ...line('bagel $2.25', { y: 420 }) },
+    { ...line('total $6.75', { y: 480 }) },
+  ];
+  const t = A.nudgeCounts(tripUp);
+  assert.equal(t.unsure, 9);
+  assert.equal(A.shouldNudge(tripUp), true);
+  // The magazine spread shot at an angle with no crop: half the lines read at 0.5, most of those with a word or two misread.
+  const misread = {
+    1: [[2, 'acurate'], [4, 'Albcrt']],
+    3: [[2, 'clocK'], [4, 'tbe']],
+    5: [[3, 'grouud'], [5, 'ycars.']],
+    7: [[2, 'pasa'], [4, 'Iittle']],
+    9: [[1, 'aud'], [4, 'tbat']],
+    11: [[2, 'tbe'], [3, 'teain']],
+    13: [[1, 'nuinbers'], [3, 'witb']],
+    15: [[1, 'tbeory'], [5, 'slivcr,']],
+    17: [[3, 'centnry'], [4, 'cxperiments.']],
+  };
+  const magazine = MAG_ORDER.map((text, i) => {
+    const words = text.split(' ');
+    const bad = (misread[i] ?? []).filter(([k]) => k < words.length);
+    for (const [k, w] of bad) words[k] = w;
+    return { ...line(words.join(' '), { y: i * 50, confidence: 1 }), ...(i % 2 === 1 ? { firstConfidence: 0.5 } : {}), unknown: bad.map(([k]) => k) };
+  });
+  const m = A.nudgeCounts(magazine);
+  assert.ok(m.share > 0.15 && m.unsure >= 3, JSON.stringify(m));
   assert.equal(A.shouldNudge(magazine), true);
-  // Blurry: low lines throughout, some garbled words the dictionary does not know.
-  const blurry = COOKBOOK.flat().map((t, i) => ({ ...line(t, { y: i * 50, confidence: i % 2 ? 0.5 : 1 }), unknown: i % 2 ? [1] : [] }));
-  assert.equal(A.shouldNudge(blurry), true);
-  // Straight cookbook shot: every line at 1.0, the runner-up agrees, a couple of real but rare words ("haricots") unknown.
-  const straight = [...COOKBOOK.flat(), '4 POUND haricots verts, stems removed'].map((t, i) => ({
-    ...line(t, { y: i * 50, confidence: 1, alternatives: [t] }),
-    unknown: t.startsWith('4 POUND') ? [2, 3] : [],
-  }));
-  assert.equal(A.shouldNudge(straight), false);
-  const c = A.nudgeCounts(straight);
-  assert.equal(c.unknown, 2);
-  assert.equal(c.unsure, 0);
-  // An unknown word counts when Vision was torn about it (the runner-up has another word there).
-  const torn = { ...line('stems removd', { y: 0, confidence: 1, alternatives: ['stems removed'] }), unknown: [1] };
-  assert.equal(A.nudgeCounts([torn]).unknownUnsure, 1);
-  // Confident garbage: most checked words unknown to the dictionary.
-  const garbled = ['tha qnick brcwn fcx jumqs', 'ovcr tbe lazv doq agaim', 'amd tben ruus awav fast'].map((t, i) => ({ ...line(t, { y: i * 50 }), unknown: [0, 1, 2, 3] }));
-  assert.equal(A.shouldNudge(garbled), true);
-  assert.equal(A.NUDGE_UNKNOWN_SHARE, 0.3);
+  // The same spread read cleanly (build 3's ISS result) gets no note, even with the same low first look.
+  assert.equal(A.shouldNudge(MAG_ORDER.map((text, i) => ({ ...line(text, { y: i * 50 }), ...(i % 2 === 1 ? { firstConfidence: 0.5 } : {}), unknown: [] }))), false);
+});
+
+// ---------- reading languages (build 5) ----------
+
+// Brian's build 4 test: a neat handwritten "- Pay electric bill" came out
+// as "- Pay electric ط ا) ا" on one scan in four. Vision was guessing the
+// language and picked Arabic from a few strokes.
+test('languages: Vision guesses the language only when more than one is picked; English alone by default', () => {
+  assert.deepEqual(A.readingLanguages(['en-US']), ['en-US']);
+  assert.deepEqual(A.readingLanguages(['fr-FR']), ['fr-FR', 'en-US']);
+  assert.equal(A.autoDetectLanguage(['en-US']), false);
+  assert.equal(A.autoDetectLanguage([]), false);
+  assert.equal(A.autoDetectLanguage(['en-US', 'fr-FR']), true);
+  assert.equal(A.autoDetectLanguage(['fr-FR']), true); // French and English
+  assert.equal(A.latinOnly(A.readingLanguages(['en-US', 'de-DE', 'vi-VT'])), true);
+  assert.equal(A.latinOnly(A.readingLanguages(['ar-SA'])), false);
+  assert.equal(A.latinOnly(A.readingLanguages(['zh-Hans'])), false);
+});
+
+/** Latin letters, digits, punctuation, symbols ($, °, ½) and spaces only. */
+const LATIN_TEXT = /^[\p{Script=Latin}0-9\p{P}\p{S}\p{No}\s]*$/u;
+
+test('languages: with a Latin-only list the output never holds another alphabet', () => {
+  const latin = A.latinOnly(A.readingLanguages(['en-US']));
+  const lines = [
+    line('Groceries', { y: 100 }),
+    line('- Pay electric ط ا) ا', { y: 160 }), // confident, but the wrong alphabet
+    line('- Call Ana', { y: 220 }),
+    line('- Café at 3', { y: 280 }), // Latin with an accent is fine
+    line('- Rent ٣ due', { y: 340 }), // an Arabic-Indic digit
+  ];
+  assert.equal(A.offScript(lines[1].text), true);
+  assert.equal(A.offScript(lines[3].text), false);
+  assert.equal(A.offScript('½ cup, 350°F, $4.50, brian.k@example.com'), false);
+  // The line goes to the second pass, read again without guessing.
+  assert.deepEqual(A.pickSecondPass(lines, undefined, { latinOnly: latin }), [1, 4]);
+  assert.deepEqual(A.pickSecondPass(lines), []); // other lists: as before
+  const again = [
+    { index: 1, text: '- Pay electric bill', confidence: 0.5, words: [], alternatives: [] }, // less confident, but right: used
+    { index: 4, text: '- Rent ٣ due', confidence: 1, words: [], alternatives: [] }, // still wrong
+  ];
+  let out = A.mergeSecondPass(lines, again, { latinOnly: latin });
+  assert.equal(out[1].text, '- Pay electric bill');
+  // A reading with another alphabet never replaces a clean line.
+  assert.equal(A.mergeSecondPass([lines[0]], [{ index: 0, text: 'Groceriesط', confidence: 1, words: [], alternatives: [] }], { latinOnly: latin })[0].text, 'Groceries');
+  // Whatever is left is shown as "?", one for one, so word positions hold.
+  out = out.map((l) => (A.offScript(l.text) ? { ...l, text: A.maskOffScript(l.text) } : l));
+  assert.equal(out[4].text, '- Rent ? due');
+  assert.equal(A.maskOffScript('- Pay electric ط ا) ا'), '- Pay electric ? ?) ?');
+  assert.equal(A.maskOffScript('- Pay electric ط ا) ا').length, '- Pay electric ط ا) ا'.length);
+  for (const l of out) assert.match(l.text, LATIN_TEXT, l.text);
+  const paras = P.groupParagraphs(out, W, H).map((p) => p.lines);
+  for (const clean of [false, true]) assert.match(T.modelText(T.buildRuns(paras, clean)), LATIN_TEXT);
 });
 
 // ---------- page outlines (build 2) ----------

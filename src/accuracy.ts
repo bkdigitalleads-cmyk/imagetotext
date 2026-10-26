@@ -7,7 +7,7 @@
  */
 import type { OcrLine, OcrWord, Point, Quad } from '../modules/vision-ocr/src/VisionOcr.types';
 
-/** Lines Vision read with less confidence than this get a second pass, and their words count as unsure for the nudge. */
+/** Lines Vision read with less confidence than this get a second pass, and their words not in the dictionary count as unsure for the nudge. */
 export const SECOND_PASS_CONFIDENCE = 0.6;
 /** Lines shorter than this share of the image height get a second pass (small print). */
 export const SMALL_LINE_HEIGHT = 0.012;
@@ -15,10 +15,10 @@ export const SMALL_LINE_HEIGHT = 0.012;
 export const SECOND_PASS_MAX_LINES = 40;
 /** How much each second-pass crop is enlarged. */
 export const SECOND_PASS_SCALE = 2;
-/** The nudge shows when more than this share of a page's words are unsure. */
-export const NUDGE_UNSURE_SHARE = 0.1;
-/** ...or when more than this share of the words the dictionary can check are unknown to it (garbled, however confident). */
-export const NUDGE_UNKNOWN_SHARE = 0.3;
+/** The nudge shows when more than this share of a page's counted words are unsure... */
+export const NUDGE_UNSURE_SHARE = 0.15;
+/** ...and at least this many of them are. */
+export const NUDGE_MIN_UNSURE = 3;
 /** A found page outline is used only at this confidence or more. */
 export const PAGE_MIN_CONFIDENCE = 0.6;
 /** ...and only if it covers at least this share of the photo. */
@@ -36,6 +36,53 @@ export const BLUR_THRESHOLD = 100;
 /** A tap holds focus and exposure at its point this long, then autofocus goes back to continuous. */
 export const FOCUS_HOLD_SECONDS = 3;
 
+// ---------- reading languages ----------
+
+/** Languages written in the Latin alphabet (BCP 47 primary subtags). */
+const LATIN_LANGUAGES = new Set([
+  'en', 'fr', 'it', 'de', 'es', 'pt', 'vi', 'nl', 'sv', 'da', 'nb', 'no', 'nn', 'fi', 'pl', 'cs', 'sk', 'tr', 'ro', 'hu',
+  'id', 'ms', 'ca', 'hr', 'sl', 'et', 'lv', 'lt', 'is', 'ga', 'cy', 'eu', 'gl', 'af', 'sw', 'tl', 'fil', 'sq', 'az', 'uz',
+]);
+
+/** The languages actually read: the ones picked in Settings, English always among them. */
+export function readingLanguages(picked: string[]): string[] {
+  const list = picked.filter(Boolean);
+  return list.includes('en-US') ? list : [...list, 'en-US'];
+}
+
+/**
+ * Whether Vision should guess the language itself: only when the person
+ * picked more than one. With English alone it guessed Arabic from a few
+ * strokes of handwriting ("- Pay electric ط ا) ا"), so it reads exactly
+ * the picked languages instead.
+ */
+export function autoDetectLanguage(picked: string[]): boolean {
+  return readingLanguages(picked).length > 1;
+}
+
+/** Every reading language is written in the Latin alphabet. */
+export function latinOnly(languages: string[]): boolean {
+  return languages.length > 0 && languages.every((l) => LATIN_LANGUAGES.has(l.split('-')[0].toLowerCase()));
+}
+
+/** Letters outside the Latin alphabet, or digits other than 0 to 9. */
+const OFF_SCRIPT = /(?![\p{Script=Latin}])\p{L}|(?![0-9])\p{Nd}/u;
+const OFF_SCRIPT_ALL = /(?![\p{Script=Latin}])\p{L}|(?![0-9])\p{Nd}/gu;
+
+/** True when a reading has characters no Latin-alphabet language uses. */
+export function offScript(text: string): boolean {
+  return OFF_SCRIPT.test(text);
+}
+
+/**
+ * For a Latin-only language list, the last guard: any letter from another
+ * alphabet still in a line becomes "?", one for one, so the text stays the
+ * same length (word positions hold) and nothing reads as a wrong script.
+ */
+export function maskOffScript(text: string): string {
+  return text.replace(OFF_SCRIPT_ALL, (c) => '?'.repeat(c.length));
+}
+
 // ---------- second pass ----------
 
 /**
@@ -43,10 +90,18 @@ export const FOCUS_HOLD_SECONDS = 3;
  * least confident and smallest go first when there are more than the cap;
  * the result is in line order.
  */
-export function pickSecondPass(lines: Pick<OcrLine, 'confidence' | 'box' | 'text'>[], max = SECOND_PASS_MAX_LINES): number[] {
+export function pickSecondPass(
+  lines: Pick<OcrLine, 'confidence' | 'box' | 'text'>[],
+  max = SECOND_PASS_MAX_LINES,
+  opts: { latinOnly?: boolean } = {}
+): number[] {
   const picked = lines
     .map((l, i) => ({ i, l }))
-    .filter(({ l }) => l.text.trim().length > 0 && (l.confidence < SECOND_PASS_CONFIDENCE || l.box.height < SMALL_LINE_HEIGHT))
+    .filter(
+      ({ l }) =>
+        l.text.trim().length > 0 &&
+        (l.confidence < SECOND_PASS_CONFIDENCE || l.box.height < SMALL_LINE_HEIGHT || (opts.latinOnly === true && offScript(l.text)))
+    )
     .sort((a, b) => a.l.confidence - b.l.confidence || a.l.box.height - b.l.box.height || a.i - b.i)
     .slice(0, Math.max(0, max))
     .map(({ i }) => i);
@@ -72,13 +127,26 @@ export interface SecondReading {
  * A second reading never loses words: one with fewer words than the first
  * is ignored (build 3 lost "fox jumps" that way), and so is one that has a
  * number run into a fraction ("1½", "11/2") the first reading did not have.
+ *
+ * With a Latin-only language list (`latinOnly`), a line holding another
+ * alphabet is replaced by a reading without one, however confident, as
+ * long as it keeps the Latin words; a reading with another alphabet never
+ * replaces one without.
  */
-export function mergeSecondPass(lines: OcrLine[], readings: SecondReading[]): OcrLine[] {
+export function mergeSecondPass(lines: OcrLine[], readings: SecondReading[], opts: { latinOnly?: boolean } = {}): OcrLine[] {
   const out = lines.slice();
+  const latinWords = (t: string) => (t.match(/\S+/g) ?? []).filter((w) => !offScript(w)).length;
   for (const r of readings) {
     const line = out[r.index];
-    if (!line || !r.text.trim() || !(r.confidence > line.confidence)) continue;
-    if (wordCount(r.text) < wordCount(line.text)) continue;
+    if (!line || !r.text.trim()) continue;
+    const fixesScript = opts.latinOnly === true && offScript(line.text) && !offScript(r.text);
+    if (opts.latinOnly === true && offScript(r.text) && !offScript(line.text)) continue;
+    if (fixesScript) {
+      if (latinWords(r.text) < latinWords(line.text)) continue;
+    } else {
+      if (!(r.confidence > line.confidence)) continue;
+      if (wordCount(r.text) < wordCount(line.text)) continue;
+    }
     if (gluedFractions(r.text) > gluedFractions(line.text)) continue;
     const { unknown: _stale, ...kept } = line;
     void _stale;
@@ -100,72 +168,74 @@ const gluedFractions = (t: string) => (t.match(/\d[½⅓⅔¼¾⅕⅖⅗⅘⅙�
 
 // ---------- the nudge ----------
 //
-// Vision's line confidence is coarse on the device (mostly 1.0, 0.5 or
-// 0.3), and the second pass lifts most low lines to 1.0, so build 2's
-// note (low lines after the second pass) never showed. A word now counts
-// as unsure when:
+// Build 4's note showed on almost every handwritten scan, clean ones
+// included: handwriting is often read at 0.5 at the first look even when
+// every word comes out right. Build 5 counts a word as unsure only when
+// BOTH hold:
 //  - its line was read below SECOND_PASS_CONFIDENCE at the first look
-//    (before any second reading replaced it), or
-//  - the phone's dictionary does not know it AND Vision was not fully sure
-//    of it (its line under 1.0, or the runner-up reading of the line has a
-//    different word there).
-// The note shows when more than NUDGE_UNSURE_SHARE of the words are unsure,
-// or when more than NUDGE_UNKNOWN_SHARE of the words the dictionary checked
-// are unknown to it (garbled text read with false confidence).
+//    (before any second reading replaced it), and
+//  - it is not a dictionary word: the phone's dictionary, in the first
+//    reading language, does not know it, or it mixes letters with digits
+//    or symbols the way a garbled reading does ("2z", "8B", "cu9").
+// List markers, single characters, numbers and punctuation are not counted
+// at all; names with a capital (the dictionary often lacks them) and words
+// with an apostrophe or a hyphen inside count as dictionary words. The
+// note shows when more than NUDGE_UNSURE_SHARE of the counted words are
+// unsure AND at least NUDGE_MIN_UNSURE of them are.
 
-type NudgeLine = Pick<OcrLine, 'text' | 'confidence'> & Partial<Pick<OcrLine, 'alternatives' | 'firstConfidence' | 'unknown'>>;
+type NudgeLine = Pick<OcrLine, 'text' | 'confidence'> & Partial<Pick<OcrLine, 'firstConfidence' | 'unknown'>>;
 
-const isWord = (w: string) => /[\p{L}\p{N}]/u.test(w);
-const bareWord = (w: string) => w.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-/** A word the dictionary check looks at (the same rule as the native side): three or more letters, no capital first letter unless all capitals. */
-const checkable = (w: string) => {
-  const word = w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
-  return word.length >= 3 && /^\p{L}+$/u.test(word) && !(/^\p{Lu}/u.test(word) && word !== word.toLocaleUpperCase());
-};
+/** An email address or web address: not a dictionary word, but not garbled either. */
+const ADDRESS = /^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+$|^(?:https?:\/\/|www\.)\S+$|^[\p{L}\p{N}-]+\.(?:com|org|net|edu|gov|io|co|uk)$/iu;
+
+/**
+ * How one token counts for the note: 'skip' (a list marker, a single
+ * character, a number, punctuation), 'word' (a dictionary word, a name, an
+ * address), or 'odd' (not a dictionary word). `unknown` says whether the
+ * phone's dictionary flagged it (letters-only words).
+ */
+export function nudgeWordKind(token: string, unknown: boolean): 'skip' | 'word' | 'odd' {
+  const core = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  if (core.length <= 1 || !/\p{L}/u.test(core)) return 'skip';
+  if (/^\p{L}+$/u.test(core)) return unknown ? 'odd' : 'word';
+  if (/^\p{L}+(?:['’-]\p{L}+)+$/u.test(core)) return 'word';
+  if (ADDRESS.test(core)) return 'word';
+  return 'odd';
+}
 
 export interface NudgeCounts {
-  /** Tokens with a letter or digit. */
+  /** Words counted (list markers, single characters, numbers and punctuation left out). */
   words: number;
-  /** Words on lines read below SECOND_PASS_CONFIDENCE at the first look. */
+  /** Counted words on lines read below SECOND_PASS_CONFIDENCE at the first look. */
   lowFirstLook: number;
-  /** Words the dictionary does not know, on a line Vision was not fully sure of or where its runner-up differs. */
-  unknownUnsure: number;
-  /** Words the dictionary checked, and how many it did not know. */
-  checked: number;
-  unknown: number;
-  /** Words counted unsure (each word once). */
+  /** Counted words that are not dictionary words. */
+  notInDictionary: number;
+  /** Both: the words that count as unsure. */
   unsure: number;
   share: number;
 }
 
 /** What the hard-to-read note is decided from, per page; logged after every read. */
 export function nudgeCounts(lines: NudgeLine[]): NudgeCounts {
-  const c: NudgeCounts = { words: 0, lowFirstLook: 0, unknownUnsure: 0, checked: 0, unknown: 0, unsure: 0, share: 0 };
+  const c: NudgeCounts = { words: 0, lowFirstLook: 0, notInDictionary: 0, unsure: 0, share: 0 };
   for (const l of lines) {
     const tokens = l.text.match(/\S+/g) ?? [];
     const low = (l.firstConfidence ?? l.confidence) < SECOND_PASS_CONFIDENCE;
     const unknown = new Set(l.unknown ?? []);
-    const runnerUp = l.alternatives?.[0];
-    const runnerWords = runnerUp != null ? new Set(runnerUp.split(/\s+/).map(bareWord)) : null;
     tokens.forEach((t, k) => {
-      if (checkable(t)) {
-        c.checked++;
-        if (unknown.has(k)) c.unknown++;
-      }
-      if (!isWord(t)) return;
+      const kind = nudgeWordKind(t, unknown.has(k));
+      if (kind === 'skip') return;
       c.words++;
-      const torn = runnerWords != null && !runnerWords.has(bareWord(t));
-      const unknownUnsure = unknown.has(k) && (l.confidence < 1 || torn);
       if (low) c.lowFirstLook++;
-      if (unknownUnsure) c.unknownUnsure++;
-      if (low || unknownUnsure) c.unsure++;
+      if (kind === 'odd') c.notInDictionary++;
+      if (low && kind === 'odd') c.unsure++;
     });
   }
   c.share = c.words === 0 ? 0 : c.unsure / c.words;
   return c;
 }
 
-/** Share of a page's words that count as unsure (see above). */
+/** Share of a page's counted words that are unsure (see above). */
 export function unsureShare(lines: NudgeLine[]): number {
   return nudgeCounts(lines).share;
 }
@@ -173,8 +243,7 @@ export function unsureShare(lines: NudgeLine[]): number {
 /** Whether the Result screen should say the photo was hard to read. */
 export function shouldNudge(lines: NudgeLine[]): boolean {
   const c = nudgeCounts(lines);
-  if (c.words === 0) return false;
-  return c.share > NUDGE_UNSURE_SHARE || (c.checked >= 10 && c.unknown / c.checked > NUDGE_UNKNOWN_SHARE);
+  return c.share > NUDGE_UNSURE_SHARE && c.unsure >= NUDGE_MIN_UNSURE;
 }
 
 // ---------- page outlines ----------

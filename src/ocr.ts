@@ -10,7 +10,23 @@ import { documentBounds, flatten, groupParagraphs, isHandwritten, readingOrder, 
 import { addPages, createDoc, getDoc, Page, PageInput, PageOrigin, replacePage, setDocTitle } from './db';
 import { keepPage, removeFiles } from './files';
 import { buildRuns, cleanText, modelText, Run } from './text';
-import { clampQuad, mergeSecondPass, nudgeCounts, orderQuad, pickSecondPass, SECOND_PASS_SCALE, shouldNudge, unturnQuad, usablePage, wholePhoto } from './accuracy';
+import {
+  autoDetectLanguage,
+  clampQuad,
+  latinOnly,
+  maskOffScript,
+  mergeSecondPass,
+  nudgeCounts,
+  offScript,
+  orderQuad,
+  pickSecondPass,
+  readingLanguages,
+  SECOND_PASS_SCALE,
+  shouldNudge,
+  unturnQuad,
+  usablePage,
+  wholePhoto,
+} from './accuracy';
 
 /** An image ready to crop and read: a local file and its pixel size. */
 export interface Source {
@@ -183,21 +199,26 @@ export interface ReadResult {
  * logged per page), and the lines are put in reading order.
  */
 async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrLine[]; width: number; height: number }> {
-  const first = await recognize(src.uri, { languages, autoDetectLanguage: true, languageCorrection: true });
+  // Exactly the reading languages from Settings (English by default); Vision
+  // guesses the language only when more than one is picked.
+  const autoDetect = autoDetectLanguage(languages);
+  const latin = latinOnly(readingLanguages(languages));
+  const first = await recognize(src.uri, { languages, autoDetectLanguage: autoDetect, languageCorrection: true });
   const width = first.width || src.width;
   const height = first.height || src.height;
   let lines = first.lines;
-  console.log(`[ocr] reader: ${first.reader ?? 'lines'}, ${lines.length} lines`);
-  const picks = pickSecondPass(lines);
+  console.log(`[ocr] reader: ${first.reader ?? 'lines'}, ${lines.length} lines, languages ${readingLanguages(languages).join(', ')}, guess ${autoDetect ? 'on' : 'off'}`);
+  const picks = pickSecondPass(lines, undefined, { latinOnly: latin });
   if (picks.length > 0) {
     const started = Date.now();
     try {
       const again = await recognizeRegions(
         src.uri,
         picks.map((i) => lines[i].box),
-        { languages, autoDetectLanguage: true, languageCorrection: true, scale: SECOND_PASS_SCALE }
+        // A closer look never guesses the language for a Latin-only list.
+        { languages, autoDetectLanguage: autoDetect && !latin, languageCorrection: true, scale: SECOND_PASS_SCALE }
       );
-      const merged = mergeSecondPass(lines, again.results.map((r, k) => ({ index: picks[k], ...r })));
+      const merged = mergeSecondPass(lines, again.results.map((r, k) => ({ index: picks[k], ...r })), { latinOnly: latin });
       const replaced = merged.filter((l, i) => l !== lines[i]).length;
       lines = merged;
       console.log(
@@ -208,12 +229,20 @@ async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrL
       // the first reading stands
     }
   }
+  if (latin) {
+    // The last guard: no letters from another alphabet in a Latin-only reading.
+    lines = lines.map((l) => {
+      if (!offScript(l.text)) return l;
+      console.log(`[ocr] other alphabet in a Latin-only reading, shown as "?": "${l.text}"`);
+      return { ...l, text: maskOffScript(l.text), alternatives: l.alternatives.map(maskOffScript), confidence: Math.min(l.confidence, 0.3) };
+    });
+  }
   const unknown = await unknownWords(lines.map((l) => l.text), languages[0] ?? 'en-US');
   lines = lines.map((l, i) => ({ ...l, unknown: unknown[i] ?? [] }));
   const n = nudgeCounts(lines);
   console.log(
     `[ocr] unsure words: ${n.unsure} of ${n.words} (${Math.round(n.share * 100)}%; low at first look ${n.lowFirstLook}, ` +
-      `unknown and unsure ${n.unknownUnsure}; dictionary ${n.unknown} unknown of ${n.checked}), note ${shouldNudge(lines) ? 'yes' : 'no'}`
+      `not in the dictionary ${n.notInDictionary}), note ${shouldNudge(lines) ? 'yes' : 'no'} (over 15% and at least 3)`
   );
   const wordsIn = countTokens(lines);
   let dropped = 0;
