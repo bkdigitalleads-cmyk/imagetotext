@@ -13,40 +13,7 @@ import { PRIVACY_URL, SUPPORT_EMAIL, SUPPORT_URL, TERMS_URL } from '../links';
 import { CheckRow, Group, Row, SwitchRow } from '../ui/Rows';
 import { Tap, TopBar } from '../ui/Tap';
 import Glyph from '../ui/Glyph';
-
-/** Names for the languages Vision reads, so the list is words, not codes. */
-const LANGUAGE_NAMES: Record<string, string> = {
-  'en-US': 'English',
-  'fr-FR': 'French',
-  'it-IT': 'Italian',
-  'de-DE': 'German',
-  'es-ES': 'Spanish',
-  'pt-BR': 'Portuguese',
-  'nl-NL': 'Dutch',
-  'sv-SE': 'Swedish',
-  'da-DK': 'Danish',
-  'no-NO': 'Norwegian',
-  'nb-NO': 'Norwegian Bokmål',
-  'nn-NO': 'Norwegian Nynorsk',
-  'pl-PL': 'Polish',
-  'cs-CZ': 'Czech',
-  'ro-RO': 'Romanian',
-  'tr-TR': 'Turkish',
-  'id-ID': 'Indonesian',
-  'ms-MY': 'Malay',
-  'vi-VT': 'Vietnamese',
-  'th-TH': 'Thai',
-  'ru-RU': 'Russian',
-  'uk-UA': 'Ukrainian',
-  'ar-SA': 'Arabic',
-  'ars-SA': 'Arabic, Najdi',
-  'zh-Hans': 'Chinese, Simplified',
-  'zh-Hant': 'Chinese, Traditional',
-  'yue-Hans': 'Cantonese, Simplified',
-  'yue-Hant': 'Cantonese, Traditional',
-  'ja-JP': 'Japanese',
-  'ko-KR': 'Korean',
-};
+import { lang, locale, t } from '../i18n';
 
 const FALLBACK_LANGUAGES = ['en-US', 'fr-FR', 'it-IT', 'de-DE', 'es-ES', 'pt-BR'];
 
@@ -54,6 +21,8 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { settings, updateSettings, isPro, setIsPro, showPaywall, bumpData, testBuild, actFree, setActFree, resetQuota, say } = useApp();
+  const s = t();
+  const names = s.languageNames;
   const [busy, setBusy] = useState(false);
   // Test builds only: seven taps on the version line open the Testing tools.
   const [testing, setTesting] = useState(false);
@@ -81,7 +50,7 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   const onRestore = async () => {
     if (!isBillingAvailable()) {
-      Alert.alert('The App Store is not answering', 'Try again in a minute.');
+      Alert.alert(s.storeNotAnswering, s.tryInAMinute);
       return;
     }
     setBusy(true);
@@ -90,17 +59,18 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
     if (res.ok) {
       cancelTrialReminder();
       setIsPro(res.isPro);
-      Alert.alert(res.isPro ? 'Pro is back on' : 'Nothing to restore', res.isPro ? 'Everything is open again.' : 'This Apple ID has no Image to Text Pro purchase.');
+      Alert.alert(res.isPro ? s.proBackOn : s.nothingToRestore, res.isPro ? s.everythingOpen : s.noPurchase);
     } else {
-      Alert.alert('Restore did not work', res.error ?? 'Try once more.');
+      // The store's own error text is English; other languages get the plain line.
+      Alert.alert(s.restoreFailed, (lang() === 'en' && res.error) || s.tryOnceMore);
     }
   };
 
   const onDeleteAll = () =>
-    Alert.alert('Delete every scan?', 'All the text and photos come off this iPhone and cannot be brought back.', [
-      { text: 'Keep them', style: 'cancel' },
+    Alert.alert(s.deleteEveryTitle, s.deleteEveryBody, [
+      { text: s.keepThem, style: 'cancel' },
       {
-        text: 'Delete everything',
+        text: s.deleteEverything,
         style: 'destructive',
         onPress: async () => {
           removeFiles(await deleteAllDocs());
@@ -111,84 +81,84 @@ export default function SettingsScreen({ onBack }: { onBack: () => void }) {
 
   // English first, then the rest by name.
   const list = [...new Set(['en-US', ...available])].sort((a, b) =>
-    a === 'en-US' ? -1 : b === 'en-US' ? 1 : (LANGUAGE_NAMES[a] ?? a).localeCompare(LANGUAGE_NAMES[b] ?? b)
+    a === 'en-US' ? -1 : b === 'en-US' ? 1 : (names[a] ?? a).localeCompare(names[b] ?? b, locale())
   );
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar theme={theme} title="Settings" back={{ label: 'Scans', onPress: onBack }} />
+      <TopBar theme={theme} title={s.settings} back={{ label: s.scansBack, onPress: onBack }} />
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 48 }}>
         {isPro ? (
-          <Group theme={theme} first title="Pro is on" note="Unlimited scans, Clean up, export files and documents of any length." />
+          <Group theme={theme} first title={s.proIsOn} note={s.proIsOnNote} />
         ) : (
           <Tap onPress={() => showPaywall('pro')} accessibilityRole="button" style={[styles.band, { backgroundColor: theme.paper, borderColor: theme.rule }]} pressedStyle={{ backgroundColor: theme.sunk }}>
             <Text style={[styles.bandText, { color: theme.ink }]}>
               <Text style={{ fontFamily: fonts.heading }}>Image to Text Pro </Text>
-              scans without a daily limit, cleans up line breaks, and exports .txt, .pdf and .md.
+              {s.proBand}
             </Text>
             <Glyph name="chevron" size={20} color={theme.ink} />
           </Tap>
         )}
 
-        <Group theme={theme} title="Reading languages" note="English is always on. Tick the others you scan in; the phone also spots the language on its own.">
+        <Group theme={theme} title={s.readingLanguages} note={s.readingLanguagesNote}>
           {list.map((code) => (
             <CheckRow
               key={code}
               theme={theme}
-              label={LANGUAGE_NAMES[code] ?? code}
-              sub={code === 'en-US' ? 'Always on' : undefined}
+              label={names[code] ?? code}
+              sub={code === 'en-US' ? s.alwaysOn : undefined}
               on={code === 'en-US' || settings.languages.includes(code)}
               onPress={() => toggleLanguage(code)}
             />
           ))}
         </Group>
 
-        <Group theme={theme} title="Photos">
+        <Group theme={theme} title={s.photosGroup}>
           <SwitchRow
             theme={theme}
-            label="Keep the original photos"
-            sub="Needed to see where a word came from. Off keeps only small thumbnails."
+            label={s.keepOriginals}
+            sub={s.keepOriginalsSub}
             value={settings.keepOriginals}
             onChange={(v) => updateSettings({ keepOriginals: v })}
           />
         </Group>
 
-        <Group theme={theme} title="Your scans" note="Text is read on this iPhone and stays on it. No account, nothing uploaded, works offline." />
+        <Group theme={theme} title={s.yourScans} note={s.yourScansNote} />
 
-        <Group theme={theme} title="Purchases and help">
-          <Row theme={theme} label={busy ? 'Restoring' : 'Restore purchases'} onPress={busy ? undefined : onRestore} />
-          <Row theme={theme} label="Terms of Use (EULA)" onPress={() => Linking.openURL(TERMS_URL)} />
-          <Row theme={theme} label="Privacy Policy" onPress={() => Linking.openURL(PRIVACY_URL)} />
-          <Row theme={theme} label="Help" onPress={() => Linking.openURL(SUPPORT_URL)} />
-          <Row theme={theme} label="Email support" value={SUPPORT_EMAIL} onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=Image%20to%20Text`)} />
+        <Group theme={theme} title={s.purchasesHelp}>
+          <Row theme={theme} label={busy ? s.restoring : s.restorePurchases} onPress={busy ? undefined : onRestore} />
+          <Row theme={theme} label={s.terms} onPress={() => Linking.openURL(TERMS_URL)} />
+          <Row theme={theme} label={s.privacy} onPress={() => Linking.openURL(PRIVACY_URL)} />
+          <Row theme={theme} label={s.help} onPress={() => Linking.openURL(SUPPORT_URL)} />
+          <Row theme={theme} label={s.emailSupport} value={SUPPORT_EMAIL} onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=Image%20to%20Text`)} />
         </Group>
 
-        <Group theme={theme} title="Start over">
-          <Row theme={theme} label="Delete every scan" danger onPress={onDeleteAll} />
+        <Group theme={theme} title={s.startOver}>
+          <Row theme={theme} label={s.deleteEveryScan} danger onPress={onDeleteAll} />
         </Group>
 
         {testBuild && (testing || actFree) && (
-          <Group theme={theme} title="Testing" note="Only in test builds. The App Store version never shows this.">
+          <Group theme={theme} title={s.testing} note={s.testingNote}>
             <SwitchRow
               theme={theme}
-              label="Act as a free user"
-              sub="Pro is ignored on this phone until this is off."
+              label={s.actFree}
+              sub={s.actFreeSub}
               value={actFree}
               onChange={(v) => setActFree(v)}
             />
             <Row
               theme={theme}
-              label="Reset today's free scans"
+              label={s.resetFree}
               onPress={async () => {
                 await resetQuota();
-                say("Today's free scans are back.");
+                say(s.resetFreeDone);
               }}
             />
           </Group>
         )}
 
         <Text style={[styles.version, { color: theme.inkFaint }]} onPress={onVersionTap} suppressHighlighting>
-          Image to Text {Constants.expoConfig?.version ?? ''}. Made in NYC.
+          {s.versionLine(Constants.expoConfig?.version ?? '')}
         </Text>
       </ScrollView>
     </View>

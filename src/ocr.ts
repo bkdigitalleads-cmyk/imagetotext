@@ -199,8 +199,9 @@ export interface ReadResult {
  * logged per page), and the lines are put in reading order.
  */
 async function readPage(src: Source, languages: string[]): Promise<{ lines: OcrLine[]; width: number; height: number }> {
-  // Exactly the reading languages from Settings (English by default); Vision
-  // guesses the language only when more than one is picked.
+  // Exactly the reading languages from Settings (by default the phone's own
+  // Latin-alphabet languages plus English), with language correction on.
+  // Vision guesses the language only for a list that mixes alphabets.
   const autoDetect = autoDetectLanguage(languages);
   const latin = latinOnly(readingLanguages(languages));
   const first = await recognize(src.uri, { languages, autoDetectLanguage: autoDetect, languageCorrection: true });

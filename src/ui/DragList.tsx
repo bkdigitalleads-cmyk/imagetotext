@@ -3,6 +3,7 @@ import { PanResponder, StyleSheet, View } from 'react-native';
 import { Theme } from '../theme';
 import Glyph from './Glyph';
 import { tick } from './motion';
+import { t } from '../i18n';
 
 /**
  * A short list you reorder by dragging the grip on each row. Rows have a
@@ -81,8 +82,8 @@ export default function DragList<T>({
             accessible
             accessibilityLabel={labelOf(item, i)}
             accessibilityActions={[
-              ...(i > 0 ? [{ name: 'moveUp', label: 'Move up' }] : []),
-              ...(i < items.length - 1 ? [{ name: 'moveDown', label: 'Move down' }] : []),
+              ...(i > 0 ? [{ name: 'moveUp', label: t().moveUp }] : []),
+              ...(i < items.length - 1 ? [{ name: 'moveDown', label: t().moveDown }] : []),
             ]}
             onAccessibilityAction={(e) => {
               if (e.nativeEvent.actionName === 'moveUp') onMove(i, i - 1);

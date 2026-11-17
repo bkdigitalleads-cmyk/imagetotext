@@ -28,6 +28,7 @@ App #11 in Brian's iOS app portfolio (seller bkdigitalleads-cmyk). Expo SDK 57, 
 - After launch the SQLite schema must stay backward compatible: never drop or rename columns or tables. New columns go in through a new step in `migrate()` in src/db.ts (guarded by PRAGMA user_version), so they run on existing installs. Settings live as key/value rows; a new setting just gets a default in `parseSettings`. Image files are stored by name in the documents folder (scans/), never by full path. Existing scans must survive every update.
 - Do not change the app name, subtitle, keywords or the rating-prompt triggers (first successful copy, later-day launch) without asking.
 - Keep changes small. Fix what the task needs and tidy only the files you already touch. List anything else you notice in NOTES.md under "Noticed, not changed" instead of fixing it. No broad refactors, dependency upgrades or Expo SDK upgrades unless Brian asks.
+- The app speaks English, German, French, Spanish and Italian. Every user-facing string lives in src/i18n.ts; a new or changed string goes into all five languages (TypeScript refuses a missing one), and prices and periods only ever come from RevenueCat. English is the default and the fallback.
 - Copy voice: plain and short. No "Unlock", "Premium", "Seamless", "Effortless", "Welcome", "Let's", exclamation marks or em dashes in any user-facing text (app, PDFs, notifications, store text, website), and none in text Brian sends to other people.
 - The highlighter color is for the live action on a screen and selected recognized text only. Everything else is ink on paper.
 - plugins/withoutPushEntitlement.js stays last in app.json plugins. After touching plugins, check `npx expo config --type introspect` still shows `ios.entitlements` as `{}` and the camera and photo library usage strings in `ios.infoPlist`.
@@ -39,7 +40,7 @@ App #11 in Brian's iOS app portfolio (seller bkdigitalleads-cmyk). Expo SDK 57, 
 
 ## Testing
 
-- Type check: `npx tsc --noEmit`. Unit checks (reading order on every way a page comes in, paragraph grouping, Clean up, the safe fixes, the page model, exports, the second pass, the nudge, page outlines, the daily quota, trial and plan rules): `npm test`. Health check: `npx expo-doctor`. Bundle check: `npx expo export --platform ios`.
+- Type check: `npx tsc --noEmit`. Unit checks (every language has every string, reading order on every way a page comes in, paragraph grouping, Clean up, the safe fixes, the page model, exports, the second pass, the nudge, page outlines, the daily quota, trial and plan rules): `npm test`. Health check: `npx expo-doctor`. Bundle check: `npx expo export --platform ios`.
 - The Swift module (modules/vision-ocr/ios) only compiles in Xcode or the EAS build; nothing here can type-check it. Keep changes to it small and read them twice.
 - Simulator (needs Xcode): `npx expo start --ios`. The simulator has no camera; use Photos or Files. Purchases do not complete in the simulator.
 - Real-device check: TestFlight build from the EAS workflow, on Brian's iPhone. Vision accuracy, the camera and haptics can only be judged there.

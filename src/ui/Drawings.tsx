@@ -4,6 +4,7 @@
  * Handwriting is drawn as pen strokes (not a font), the same every time.
  */
 import React from 'react';
+import { t } from '../i18n';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { G, Line, Path, Rect } from 'react-native-svg';
 import { Theme, fonts, radius } from '../theme';
@@ -68,7 +69,7 @@ function printRows(x: number, y: number, width: number, rows: number, gap: numbe
 export function PhotoToText({ theme, width = 330 }: { theme: Theme; width?: number }) {
   const s = width / 300;
   return (
-    <View accessible accessibilityRole="image" accessibilityLabel="A photo of a handwritten page, and the same lines as text, the first one highlighted.">
+    <View accessible accessibilityRole="image" accessibilityLabel={t().altPhotoToText}>
       <Svg width={300 * s} height={250 * s} viewBox="0 0 300 250">
         {/* the photo */}
         <G transform="rotate(-4 110 95)">
@@ -98,8 +99,9 @@ export function PhotoToText({ theme, width = 330 }: { theme: Theme; width?: numb
 /** A handwritten note, and what it says, typed. */
 export function HandToType({ theme, width = 300 }: { theme: Theme; width?: number }) {
   const s = width / 300;
+  const w = t();
   return (
-    <View style={{ width: 300 * s, alignItems: 'center' }} accessible accessibilityRole="image" accessibilityLabel="A handwritten note that reads: Call Ana before 4. Pick up the prints. Oat milk. The same words typed below it.">
+    <View style={{ width: 300 * s, alignItems: 'center' }} accessible accessibilityRole="image" accessibilityLabel={w.altHandToType(`${w.noteLine1} ${w.noteLine2} ${w.noteLine3}`)}>
       <Svg width={300 * s} height={150 * s} viewBox="0 0 300 150">
         <G transform="rotate(-3 150 75)">
           <Rect x={46} y={14} width={208} height={124} fill={theme.paper} stroke={theme.rule} strokeWidth={1.5} />
@@ -113,10 +115,10 @@ export function HandToType({ theme, width = 300 }: { theme: Theme; width?: numbe
       </Svg>
       <View style={[styles.typed, { borderTopColor: theme.rule }]} importantForAccessibility="no-hide-descendants">
         <Text style={[styles.typedLine, { color: theme.ink }]}>
-          <Text style={{ backgroundColor: theme.highlightWash }}>Call Ana before 4.</Text>
+          <Text style={{ backgroundColor: theme.highlightWash }}>{w.noteLine1}</Text>
         </Text>
-        <Text style={[styles.typedLine, { color: theme.ink }]}>Pick up the prints.</Text>
-        <Text style={[styles.typedLine, { color: theme.ink }]}>Oat milk.</Text>
+        <Text style={[styles.typedLine, { color: theme.ink }]}>{w.noteLine2}</Text>
+        <Text style={[styles.typedLine, { color: theme.ink }]}>{w.noteLine3}</Text>
       </View>
     </View>
   );
@@ -128,7 +130,7 @@ export function HandToType({ theme, width = 300 }: { theme: Theme; width?: numbe
 export function OfflinePhone({ theme, width = 300 }: { theme: Theme; width?: number }) {
   const s = width / 300;
   return (
-    <View accessible accessibilityRole="image" accessibilityLabel="A phone in airplane mode showing a page of text.">
+    <View accessible accessibilityRole="image" accessibilityLabel={t().altOffline}>
       <Svg width={300 * s} height={260 * s} viewBox="0 0 300 260">
         <Rect x={92} y={8} width={116} height={244} rx={22} fill={theme.paper} stroke={theme.ink} strokeWidth={2.2} />
         <Rect x={132} y={18} width={36} height={8} rx={4} fill={theme.ink} />
@@ -148,8 +150,8 @@ export function OfflinePhone({ theme, width = 300 }: { theme: Theme; width?: num
 export function CleanUpPair({ theme, compact = false }: { theme: Theme; compact?: boolean }) {
   const h = compact ? 92 : 124;
   return (
-    <View style={styles.pair} accessible accessibilityRole="image" accessibilityLabel="Text with broken lines, and the same text cleaned up into a paragraph.">
-      <Slip theme={theme} label="As read" height={h}>
+    <View style={styles.pair} accessible accessibilityRole="image" accessibilityLabel={t().altCleanUp}>
+      <Slip theme={theme} label={t().asRead} height={h}>
         {[0.62, 0.8, 0.44, 0.7, 0.36, 0.66].slice(0, compact ? 4 : 6).map((w, i) => (
           <View key={i} style={[styles.bar, { width: `${w * 100}%`, backgroundColor: theme.inkSoft }]} />
         ))}
@@ -157,7 +159,7 @@ export function CleanUpPair({ theme, compact = false }: { theme: Theme; compact?
       <Svg width={26} height={20} viewBox="0 0 26 20">
         <Path d="M2 10 Q13 9 22 10 M16 4 L22.5 10 L16 16" stroke={theme.ink} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
       </Svg>
-      <Slip theme={theme} label="Clean up" height={h}>
+      <Slip theme={theme} label={t().cleanUp} height={h}>
         {[1, 1, 1, 0.5].map((w, i) => (
           <View key={i} style={[styles.bar, { width: `${w * 100}%`, backgroundColor: theme.ink }]} />
         ))}
@@ -182,8 +184,8 @@ function Slip({ theme, label, height, children }: { theme: Theme; label: string;
 /** Three days, the second one ringed in ink: that is when the reminder comes. */
 export function TrialDays({ theme }: { theme: Theme }) {
   return (
-    <View style={styles.days} accessible accessibilityLabel="Day 1, day 2 with the reminder, day 3">
-      {['Day 1', 'Day 2', 'Day 3'].map((d, i) => (
+    <View style={styles.days} accessible accessibilityLabel={t().altDays}>
+      {[1, 2, 3].map((n) => t().day(n)).map((d, i) => (
         <View key={d} style={styles.dayCol}>
           <View style={styles.day}>
             <Svg width={88} height={88} style={StyleSheet.absoluteFill}>
@@ -192,9 +194,11 @@ export function TrialDays({ theme }: { theme: Theme }) {
                 <Path d="M44 4 C 71 2, 87 22, 83 46 C 79 72, 51 86, 27 78 C 7 70, 1 44, 11 24 C 19 10, 35 4, 53 6" fill="none" stroke={theme.ink} strokeWidth={2.4} strokeLinecap="round" />
               )}
             </Svg>
-            <Text style={[styles.dayText, { color: theme.ink }]}>{d}</Text>
+            <Text style={[styles.dayText, { color: theme.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+              {d}
+            </Text>
           </View>
-          <Text style={[styles.dayNote, { color: i === 1 ? theme.ink : 'transparent' }]}>reminder</Text>
+          <Text style={[styles.dayNote, { color: i === 1 ? theme.ink : 'transparent' }]}>{t().reminderWord}</Text>
         </View>
       ))}
     </View>
@@ -211,6 +215,6 @@ const styles = StyleSheet.create({
   days: { flexDirection: 'row', gap: 12 },
   dayCol: { alignItems: 'center', gap: 6 },
   day: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
-  dayText: { fontFamily: fonts.heading, fontSize: 19 },
+  dayText: { fontFamily: fonts.heading, fontSize: 19, maxWidth: 70 },
   dayNote: { fontFamily: fonts.heading, fontSize: 15 },
 });

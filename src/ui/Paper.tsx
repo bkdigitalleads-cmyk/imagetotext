@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Path, Rect } from 'react-native-svg';
 import { Theme, fonts, radius, tabular } from '../theme';
 import { useReduceMotion } from './motion';
+import { t } from '../i18n';
 
 /** Photos sit a little dimmer on dim paper, so a white page never glares at night. */
 export const DIM_PHOTO = 0.82;
@@ -112,7 +113,7 @@ export function SlipNote({
   text,
   action,
   onClose,
-  closeLabel = 'Dismiss',
+  closeLabel = t().dismiss,
 }: {
   theme: Theme;
   text: string;
@@ -171,7 +172,7 @@ export function Tray({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.trayRoot}>
-        <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(20, 18, 15, 0.38)' }]} onPress={onClose} accessibilityLabel="Close" accessibilityRole="button" />
+        <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(20, 18, 15, 0.38)' }]} onPress={onClose} accessibilityLabel={t().close} accessibilityRole="button" />
         <Animated.View
           style={[
             styles.tray,

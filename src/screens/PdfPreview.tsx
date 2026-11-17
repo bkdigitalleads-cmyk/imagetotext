@@ -2,8 +2,8 @@ import React from 'react';
 import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, fonts, radius } from '../theme';
-import { dayKey } from '../quota';
 import { GlyphButton, InkButton } from '../ui/Tap';
+import { longDate, t } from '../i18n';
 
 /**
  * Free users' look at the PDF export: their own text laid out as the
@@ -38,16 +38,16 @@ export default function PdfPreview({
       <View style={[styles.container, { backgroundColor: theme.sunk }]}>
         <View style={[styles.header, { borderBottomColor: theme.rule, backgroundColor: theme.bg }]}>
           <Text style={[styles.headerTitle, { color: theme.ink }]} accessibilityRole="header">
-            PDF preview
+            {t().pdfPreview}
           </Text>
-          <GlyphButton theme={theme} glyph="close" label="Close the preview" onPress={onClose} color={theme.inkSoft} />
+          <GlyphButton theme={theme} glyph="close" label={t().closePreview} onPress={onClose} color={theme.inkSoft} />
         </View>
-        <Text style={[styles.note, { color: theme.inkSoft }]}>Your text as the PDF lays it out. Pro saves and shares the clean copy.</Text>
+        <Text style={[styles.note, { color: theme.inkSoft }]}>{t().pdfPreviewNote}</Text>
 
         <ScrollView contentContainerStyle={styles.scroll}>
           <View style={[styles.page, theme.isDark && { opacity: 0.72 }]}>
             <Text style={styles.meta}>
-              {dayKey(Date.now())} · {kept.length} {kept.length === 1 ? 'page' : 'pages'}
+              {longDate(new Date())} · {t().pages(kept.length)}
             </Text>
             {kept.map((p, i) => (
               <View key={i}>
@@ -62,7 +62,7 @@ export default function PdfPreview({
             <View style={styles.watermarkLayer} pointerEvents="none">
               {[0, 1, 2].map((i) => (
                 <Text key={i} style={styles.watermark} accessibilityElementsHidden importantForAccessibility="no">
-                  SAMPLE
+                  {t().sample}
                 </Text>
               ))}
             </View>
@@ -71,10 +71,10 @@ export default function PdfPreview({
 
         <View style={[styles.bar, { borderTopColor: theme.rule, backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 16) }]}>
           <View style={{ flex: 1 }}>
-            <InkButton theme={theme} label="Share, Pro" glyph="share" onPress={onLocked} />
+            <InkButton theme={theme} label={t().sharePro} glyph="share" onPress={onLocked} />
           </View>
           <View style={{ flex: 1 }}>
-            <InkButton theme={theme} label="Print, Pro" glyph="export" onPress={onLocked} />
+            <InkButton theme={theme} label={t().printPro} glyph="export" onPress={onLocked} />
           </View>
         </View>
       </View>

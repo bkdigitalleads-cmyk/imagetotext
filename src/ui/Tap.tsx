@@ -86,7 +86,7 @@ export function InkButton({
       pressedStyle={{ backgroundColor: theme.sunk }}
     >
       {glyph && <Glyph name={glyph} size={22} color={theme.ink} />}
-      <Text style={[styles.inkLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.5} numberOfLines={1}>
+      <Text style={[styles.inkLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.5} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
         {label}
       </Text>
     </Tap>
@@ -119,7 +119,7 @@ export function ToolButton({
     >
       <Glyph name={glyph} size={26} color={theme.ink} />
       <View style={styles.toolWords}>
-        <Text style={[styles.toolLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+        <Text style={[styles.toolLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
           {label}
         </Text>
         {tag ? (
@@ -215,7 +215,7 @@ export function TopBar({
         {back && (
           <Tap onPress={back.onPress} hitSlop={10} accessibilityRole="button" accessibilityLabel={back.label} style={styles.back}>
             <Glyph name="back" size={24} color={theme.ink} />
-            <Text style={[styles.backLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3}>
+            <Text style={[styles.backLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
               {back.label}
             </Text>
           </Tap>
@@ -267,6 +267,6 @@ const styles = StyleSheet.create({
   bar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, minHeight: 52 },
   barSide: { flex: 1, minHeight: 44, justifyContent: 'center' },
   back: { flexDirection: 'row', alignItems: 'center', gap: 2, minHeight: 44, paddingRight: 8 },
-  backLabel: { fontSize: 17 },
+  backLabel: { fontSize: 17, flexShrink: 1 },
   barTitle: { fontFamily: fonts.heading, fontSize: 19, textAlign: 'center', flex: 2 },
 });

@@ -12,6 +12,7 @@ import type { Quad } from '../../modules/vision-ocr';
 import { captureHaptic, useReduceMotion } from '../ui/motion';
 import { GlyphButton, InkButton, LiveButton, Tap, WordButton } from '../ui/Tap';
 import { SlipNote } from '../ui/Paper';
+import { t } from '../i18n';
 
 /**
  * Getting pages in: the camera with a page-shaped guide, then crop and
@@ -171,21 +172,21 @@ export default function CaptureFlow({
             onCancel={onCancel}
             primary={
               index < items.length - 1
-                ? { label: 'Next page', onPress: () => setIndex(index + 1) }
-                : { label: items.length > 1 ? `Read ${items.length} pages` : 'Read it', onPress: () => read(items) }
+                ? { label: t().nextPage, onPress: () => setIndex(index + 1) }
+                : { label: items.length > 1 ? t().readN(items.length) : t().readIt, onPress: () => read(items) }
             }
-            secondary={start.kind === 'camera' && index === items.length - 1 && roomForMore ? { label: 'Scan another page', onPress: () => setStep('camera') } : undefined}
+            secondary={start.kind === 'camera' && index === items.length - 1 && roomForMore ? { label: t().scanAnother, onPress: () => setStep('camera') } : undefined}
             skipAll={items.length > 1 && index < items.length - 1 ? () => read(items) : undefined}
           />
         )}
         {step === 'reading' && <ReadingStep src={prepared[Math.min(done, prepared.length - 1)]} done={done} total={items.length} />}
         {step === 'error' && (
           <View style={styles.center}>
-            <Text style={styles.errorTitle}>That page did not read.</Text>
-            <Text style={styles.errorLine}>Try once more. If it keeps happening, a new photo in better light usually works.</Text>
+            <Text style={styles.errorTitle}>{t().pageDidNotRead}</Text>
+            <Text style={styles.errorLine}>{t().pageDidNotReadLine}</Text>
             <View style={styles.errorActions}>
-              <LiveButton theme={room} label="Try again" onPress={() => read(items)} />
-              <InkButton theme={room} label="Close" onPress={onCancel} />
+              <LiveButton theme={room} label={t().tryAgain} onPress={() => read(items)} />
+              <InkButton theme={room} label={t().close} onPress={onCancel} />
             </View>
           </View>
         )}
@@ -268,15 +269,15 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
   if (!perm.granted) {
     return (
       <View style={[styles.center, { paddingTop: insets.top }]}>
-        <Text style={styles.errorTitle}>The camera reads pages right here on the phone.</Text>
-        <Text style={styles.errorLine}>Nothing is uploaded. Allow the camera and point it at a page.</Text>
+        <Text style={styles.errorTitle}>{t().cameraTitle}</Text>
+        <Text style={styles.errorLine}>{t().cameraLine}</Text>
         <View style={styles.errorActions}>
           {perm.canAskAgain ? (
-            <LiveButton theme={room} label="Allow the camera" onPress={() => requestPerm()} />
+            <LiveButton theme={room} label={t().allowCamera} onPress={() => requestPerm()} />
           ) : (
-            <LiveButton theme={room} label="Open Settings" onPress={() => Linking.openSettings()} />
+            <LiveButton theme={room} label={t().openSettings} onPress={() => Linking.openSettings()} />
           )}
-          <InkButton theme={room} label="Not now" onPress={onClose} />
+          <InkButton theme={room} label={t().notNow} onPress={onClose} />
         </View>
       </View>
     );
@@ -290,8 +291,8 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
         style={StyleSheet.absoluteFill}
         onPress={(e) => tapToFocus(e.nativeEvent.locationX, e.nativeEvent.locationY)}
         accessibilityRole="button"
-        accessibilityLabel="Camera view"
-        accessibilityHint="Tap the page to focus on it"
+        accessibilityLabel={t().cameraView}
+        accessibilityHint={t().cameraHint}
       />
       {area.width > 0 && (
         <>
@@ -309,7 +310,8 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
             />
           )}
           <Text pointerEvents="none" style={[styles.hint, { top: gy - 44 }]} maxFontSizeMultiplier={1.3}>
-            {pageNumber > 1 ? `Page ${pageNumber}. ` : ''}Fill the frame with the page, straight on.
+            {pageNumber > 1 ? `${t().page(pageNumber)}. ` : ''}
+            {t().fillFrame}
           </Text>
         </>
       )}
@@ -317,9 +319,9 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
         <View style={[styles.blurSlip, { bottom: Math.max(insets.bottom, 16) + 120 }]}>
           <SlipNote
             theme={room}
-            text="That looks blurry. Hold still and tap the page to focus."
-            action={{ label: 'Retake', onPress: () => setBlurry(null) }}
-            closeLabel="Use anyway"
+            text={t().blurry}
+            action={{ label: t().retake, onPress: () => setBlurry(null) }}
+            closeLabel={t().useAnyway}
             onClose={() => {
               const b = blurry;
               setBlurry(null);
@@ -329,11 +331,11 @@ function CameraStep({ pageNumber, onShot, onClose }: { pageNumber: number; onSho
         </View>
       )}
       <View style={[styles.cameraBar, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
-        <GlyphButton theme={room} glyph="close" label="Close" onPress={onClose} color={PAPER} size={52} />
-        <Tap onPress={shoot} disabled={busy} accessibilityRole="button" accessibilityLabel="Take the photo" style={styles.shutterRing} pressedStyle={{ transform: [{ scale: 0.94 }] }}>
+        <GlyphButton theme={room} glyph="close" label={t().close} onPress={onClose} color={PAPER} size={52} />
+        <Tap onPress={shoot} disabled={busy} accessibilityRole="button" accessibilityLabel={t().takePhoto} style={styles.shutterRing} pressedStyle={{ transform: [{ scale: 0.94 }] }}>
           <View style={[styles.shutter, { backgroundColor: room.highlight }]}>{busy && <ActivityIndicator color={lightTheme.onHighlight} />}</View>
         </Tap>
-        <GlyphButton theme={room} glyph="torch" label={torch ? 'Light off' : 'Light on'} onPress={() => setTorch(!torch)} on={torch} color={PAPER} size={52} />
+        <GlyphButton theme={room} glyph="torch" label={torch ? t().lightOff : t().lightOn} onPress={() => setTorch(!torch)} on={torch} color={PAPER} size={52} />
       </View>
     </View>
   );
@@ -485,18 +487,18 @@ function CropStep({
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.cropTop}>
-        <WordButton theme={room} label="Cancel" onPress={onCancel} color={PAPER} />
+        <WordButton theme={room} label={t().cancel} onPress={onCancel} color={PAPER} />
         <Text style={[styles.cropTitle, tabular]} maxFontSizeMultiplier={1.3} numberOfLines={2}>
-          {position.total > 1 ? `Page ${position.index + 1} of ${position.total}` : item.guess ? 'Drag the corners\nto the page' : crop.quad ? 'Page found' : 'Crop'}
+          {position.total > 1 ? t().pageOf(position.index + 1, position.total) : item.guess ? t().dragCornersTitle : crop.quad ? t().pageFound : t().cropTitle}
         </Text>
         <View style={styles.cropTools}>
-          {!untouched && <GlyphButton theme={room} glyph="crop" label="Use the whole photo" onPress={() => onChange(fullCrop(src, 0))} color={PAPER} />}
-          <GlyphButton theme={room} glyph="rotate" label="Rotate a quarter turn" onPress={rotate} color={PAPER} />
+          {!untouched && <GlyphButton theme={room} glyph="crop" label={t().useWholePhoto} onPress={() => onChange(fullCrop(src, 0))} color={PAPER} />}
+          <GlyphButton theme={room} glyph="rotate" label={t().rotate} onPress={rotate} color={PAPER} />
         </View>
       </View>
       {position.total > 1 && item.guess && (
         <Text style={styles.cropHint} maxFontSizeMultiplier={1.3}>
-          Drag the corners to the page
+          {t().dragCorners}
         </Text>
       )}
 
@@ -507,10 +509,10 @@ function CropStep({
         accessible
         accessibilityLabel={
           item.guess
-            ? 'No page edge was found. Drag each corner to a corner of the page.'
+            ? t().cropA11yGuess
             : crop.quad
-            ? 'The page was found. Drag a corner to fit the edge of the page.'
-            : 'Crop area. Drag a corner to crop, or drag inside to move it.'
+            ? t().cropA11yFound
+            : t().cropA11y
         }
       >
         {s > 0 && (
@@ -541,7 +543,7 @@ function CropStep({
         {secondary && <InkButton theme={room} label={secondary.label} glyph="camera" onPress={secondary.onPress} />}
         {skipAll && (
           <View style={{ alignItems: 'center' }}>
-            <WordButton theme={room} label="Read all as they are" onPress={skipAll} color={PAPER_SOFT} />
+            <WordButton theme={room} label={t().readAll} onPress={skipAll} color={PAPER_SOFT} />
           </View>
         )}
       </View>
@@ -600,7 +602,7 @@ function ReadingStep({ src, done, total }: { src?: Source; done: number; total: 
           </View>
         )}
         <Text style={[styles.reading, tabular]} accessibilityLiveRegion="polite">
-          {total > 1 ? `Reading page ${Math.min(done + 1, total)} of ${total}` : 'Reading'}
+          {total > 1 ? t().readingPage(Math.min(done + 1, total), total) : t().reading}
         </Text>
       </View>
     </View>

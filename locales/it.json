@@ -1,0 +1,6 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "Image to Text usa la fotocamera per fotografare pagine, appunti e scontrini e leggerne il testo su questo iPhone. Le foto non vengono caricate.",
+    "NSPhotoLibraryUsageDescription": "Image to Text apre le foto che scegli e ne legge il testo su questo iPhone. Non viene caricato niente."
+  }
+}

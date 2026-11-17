@@ -51,13 +51,37 @@ export function readingLanguages(picked: string[]): string[] {
 }
 
 /**
- * Whether Vision should guess the language itself: only when the person
- * picked more than one. With English alone it guessed Arabic from a few
- * strokes of handwriting ("- Pay electric ط ا) ا"), so it reads exactly
- * the picked languages instead.
+ * Whether Vision should guess the language itself. Never for a list of
+ * Latin-alphabet languages: Vision reads every language in that list as
+ * given (German, French, Spanish, Italian and English together, accents and
+ * the sharp s included), and guessing once picked Arabic from a few strokes
+ * of English handwriting ("- Pay electric ط ا) ا"). Only a list that mixes
+ * in another alphabet (Japanese and English, say) lets Vision guess.
  */
 export function autoDetectLanguage(picked: string[]): boolean {
-  return readingLanguages(picked).length > 1;
+  const list = readingLanguages(picked);
+  return list.length > 1 && !latinOnly(list);
+}
+
+/** Vision's code for each device language written in the Latin alphabet. */
+const VISION_CODE: Record<string, string> = {
+  en: 'en-US', de: 'de-DE', fr: 'fr-FR', es: 'es-ES', it: 'it-IT', pt: 'pt-BR', nl: 'nl-NL', sv: 'sv-SE', da: 'da-DK',
+  nb: 'nb-NO', no: 'no-NO', nn: 'nn-NO', pl: 'pl-PL', cs: 'cs-CZ', ro: 'ro-RO', tr: 'tr-TR', id: 'id-ID', ms: 'ms-MY', vi: 'vi-VT',
+};
+
+/**
+ * The reading languages before the person picks any in Settings: the
+ * phone's own languages that Vision reads in the Latin alphabet (up to
+ * three, the phone's order), then English. A German iPhone reads German
+ * and English; an English one, English alone, as before. Other alphabets
+ * stay a choice in Settings.
+ */
+export function deviceReadingLanguages(deviceLanguageCodes: (string | null | undefined)[]): string[] {
+  const codes = deviceLanguageCodes
+    .map((c) => (c ?? '').toLowerCase().split(/[-_]/)[0])
+    .map((c) => VISION_CODE[c])
+    .filter((c): c is string => c != null && c !== 'en-US');
+  return readingLanguages([...new Set(codes)].slice(0, 3));
 }
 
 /** Every reading language is written in the Latin alphabet. */

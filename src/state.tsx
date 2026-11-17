@@ -5,6 +5,8 @@ import { kvAll, kvGet, kvSet } from './db';
 import { syncTrialReminder } from './reminder';
 import { consume, dayKey, parseQuota, QuotaRecord, remainingToday } from './quota';
 import { isTestBuild } from '../modules/vision-ocr';
+import { getLocales } from 'expo-localization';
+import { deviceReadingLanguages } from './accuracy';
 
 export interface Settings {
   /** Reading languages, most likely first (BCP 47). en-US is always read as well. */
@@ -14,9 +16,19 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  languages: ['en-US'],
+  // Until the person picks languages in Settings: the phone's own (Latin
+  // alphabet) languages plus English, so a German iPhone reads German too.
+  languages: deviceReadingLanguages(safeLocales()),
   keepOriginals: true,
 };
+
+function safeLocales(): (string | null)[] {
+  try {
+    return getLocales().map((l) => l.languageCode);
+  } catch {
+    return [];
+  }
+}
 
 const SETTING_PREFIX = 'setting.';
 export const ONBOARDED_KEY = 'flag.onboarded';
