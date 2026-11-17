@@ -21,18 +21,18 @@ Rule: no word from the name or subtitle (image, to, text, handwriting, ocr, scan
 
 ## Spanish (Mexico) locale
 
-A second localization in App Store Connect, Spanish (Mexico). Name and subtitle are the same as English; only the keywords differ, so the two lists together cover more words.
+A second localization in App Store Connect, Spanish (Mexico), as set in App Store Connect for 1.0.1 (Brian, Nov 17). It has its own name and subtitle, in English, so the two listings together cover more words.
 
-### Name (30/30)
-Image to Text: Handwriting OCR
+### Name (28/30)
+OCR Scanner: Picture to Text
 
-### Subtitle (27/30)
-Text Scanner, Copy & Export
+### Subtitle (30/30)
+Transcribe Handwriting & Notes
 
-### Keywords (96/100)
-extract,convert,recognition,paste,whiteboard,receipt,cursive,writing,letter,book,page,lens,study
+### Keywords (100/100)
+image,document,photo,scan,handwritten,pdf,convert,reader,whiteboard,receipt,cursive,live,letter,book
 
-No word repeats the English keywords, the name or the subtitle.
+No keyword repeats a word from this locale's name or subtitle. Seven words are also in the English keywords (document, photo, scan, handwritten, pdf, reader, live).
 
 ### What's New (1.0.1)
 Small fixes and improvements.
