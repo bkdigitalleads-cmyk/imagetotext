@@ -7,6 +7,7 @@ import * as Notifications from 'expo-notifications';
 import Purchases from 'react-native-purchases';
 import { ENTITLEMENT_ID, isBillingAvailable } from './purchases';
 import { trialReminderAt } from './offer';
+import { t } from './i18n';
 
 const TRIAL_ID = 'imagetotext.trialReminder';
 
@@ -70,8 +71,9 @@ export async function scheduleTrialReminderIfTrial(): Promise<boolean> {
     await Notifications.scheduleNotificationAsync({
       identifier: TRIAL_ID,
       content: {
-        title: 'Your free trial ends tomorrow',
-        body: 'Image to Text Pro renews tomorrow. Cancel anytime in Settings, Apple ID, Subscriptions.',
+        // In the app's language when it is scheduled (right after the purchase).
+        title: t().trialEndsTitle,
+        body: t().trialEndsBody,
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,

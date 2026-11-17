@@ -10,6 +10,7 @@ import * as Sharing from 'expo-sharing';
 import { nameForShare, writeShareFile } from './files';
 import { dayKey } from './quota';
 import { fileBaseName, htmlEscape, toMarkdown, toTxt } from './text';
+import { lang, longDate, t } from './i18n';
 
 export type ExportKind = 'txt' | 'pdf' | 'md';
 
@@ -35,8 +36,8 @@ const CSS = `
   hr { border: none; border-top: 1px solid #dcd4c3; margin: 24px 0; }
 `;
 
-/** The PDF's HTML: paragraphs as paragraphs, a rule between pages. */
-export function pdfHtml(pages: string[], day: string): string {
+/** The PDF's HTML: paragraphs as paragraphs, a rule between pages, and a header line (date and page count, in the app's language). */
+export function pdfHtml(pages: string[], meta: string): string {
   const body = pages
     .map((p) => p.trim())
     .filter(Boolean)
@@ -47,19 +48,20 @@ export function pdfHtml(pages: string[], day: string): string {
         .join('')
     )
     .join('<hr />');
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>${CSS}</style></head><body>
-  <div class="meta">${htmlEscape(day)} · ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}</div>${body}</body></html>`;
+  return `<!DOCTYPE html><html lang="${lang()}"><head><meta charset="utf-8" /><style>${CSS}</style></head><body>
+  <div class="meta">${htmlEscape(meta)}</div>${body}</body></html>`;
 }
 
 /** Writes the file and opens the share sheet for it. */
 export async function exportFile(kind: ExportKind, pages: string[]): Promise<void> {
+  // File names keep the sortable date (2026-11-17) whatever the language.
   const day = dayKey(Date.now());
-  const name = fileBaseName(pages.join('\n\n'), day);
+  const name = fileBaseName(pages.join('\n\n'), day, t().fileScan);
   let uri: string;
   let mimeType: string;
   let UTI: string;
   if (kind === 'pdf') {
-    const printed = await Print.printToFileAsync({ html: pdfHtml(pages, day) });
+    const printed = await Print.printToFileAsync({ html: pdfHtml(pages, `${longDate(new Date())} · ${t().pages(pages.length)}`) });
     uri = nameForShare(printed.uri, `${name}.pdf`);
     mimeType = 'application/pdf';
     UTI = 'com.adobe.pdf';

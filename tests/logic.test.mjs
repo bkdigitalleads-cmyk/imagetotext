@@ -13,6 +13,7 @@ const T = await import('../src/text.ts');
 const Q = await import('../src/quota.ts');
 const O = await import('../src/offer.ts');
 const A = await import('../src/accuracy.ts');
+const I = await import('../src/i18n.ts');
 
 // A page 1000 x 1400 px. Lines are 30 px tall with 12 px between them.
 const W = 1000;
@@ -289,9 +290,10 @@ test('page model: words get their own boxes from Vision, and unsure words are ma
 
 test('words and the copy line: punctuation alone is not a word; 1 word, 1,204 words', () => {
   assert.equal(T.countWords('Hello, world - again 42 !'), 4);
-  assert.equal(T.copiedLine(1), 'Copied. 1 word.');
-  assert.equal(T.copiedLine(412), 'Copied. 412 words.');
-  assert.equal(T.copiedLine(1204), 'Copied. 1,204 words.');
+  I.setLocale('en-US', 'en');
+  assert.equal(I.t().copied(1), 'Copied. 1 word.');
+  assert.equal(I.t().copied(412), 'Copied. 412 words.');
+  assert.equal(I.t().copied(1204), 'Copied. 1,204 words.');
 });
 
 test('titles and file names come from the first line with letters', () => {
@@ -586,13 +588,15 @@ test('nudge: no note on the clean Groceries list or a This Week list; a note on 
 // Brian's build 4 test: a neat handwritten "- Pay electric bill" came out
 // as "- Pay electric ط ا) ا" on one scan in four. Vision was guessing the
 // language and picked Arabic from a few strokes.
-test('languages: Vision guesses the language only when more than one is picked; English alone by default', () => {
+test('languages: Vision reads the picked list as given and guesses only for a list that mixes alphabets', () => {
   assert.deepEqual(A.readingLanguages(['en-US']), ['en-US']);
   assert.deepEqual(A.readingLanguages(['fr-FR']), ['fr-FR', 'en-US']);
   assert.equal(A.autoDetectLanguage(['en-US']), false);
   assert.equal(A.autoDetectLanguage([]), false);
-  assert.equal(A.autoDetectLanguage(['en-US', 'fr-FR']), true);
-  assert.equal(A.autoDetectLanguage(['fr-FR']), true); // French and English
+  // Build 6 (European languages): a list of Latin-alphabet languages is read as given, never guessed.
+  assert.equal(A.autoDetectLanguage(['en-US', 'fr-FR']), false);
+  assert.equal(A.autoDetectLanguage(['de-DE', 'fr-FR', 'es-ES', 'it-IT']), false);
+  assert.equal(A.autoDetectLanguage(['ja-JP']), true); // Japanese and English: another alphabet, Vision may guess
   assert.equal(A.latinOnly(A.readingLanguages(['en-US', 'de-DE', 'vi-VT'])), true);
   assert.equal(A.latinOnly(A.readingLanguages(['ar-SA'])), false);
   assert.equal(A.latinOnly(A.readingLanguages(['zh-Hans'])), false);
@@ -632,6 +636,158 @@ test('languages: with a Latin-only list the output never holds another alphabet'
   for (const l of out) assert.match(l.text, LATIN_TEXT, l.text);
   const paras = P.groupParagraphs(out, W, H).map((p) => p.lines);
   for (const clean of [false, true]) assert.match(T.modelText(T.buildRuns(paras, clean)), LATIN_TEXT);
+});
+
+// ---------- European languages (build 6) ----------
+
+/** Every string of a language, with the functions called on sample values. */
+const allStrings = (s) => {
+  const out = [];
+  const units = ['DAY', 'WEEK', 'MONTH', 'YEAR'];
+  for (const [key, v] of Object.entries(s)) {
+    if (typeof v === 'string') out.push([key, v]);
+    else if (typeof v === 'function') {
+      for (const n of [0, 1, 2, 3, 21, 1204]) {
+        const args = { 0: [], 1: [n], 2: [n, 3], 3: [n, units[n % 4], '4,99 €'] }[v.length] ?? [n];
+        // A few take text or a price first: give them text.
+        const textFirst = ['today', 'yesterday', 'perYear', 'perWeek', 'trialLine', 'disclosureYearly', 'versionLine', 'altHandToType', 'headlineWithTrial', 'disclosureWeekly', 'pageRow'];
+        let a = args;
+        if (key === 'pageRow') a = [n, n % 2 ? 'Call Ana' : ''];
+        else if (key === 'headlineWithTrial') a = ['Image to Text Pro.', n, units[n % 4]];
+        else if (key === 'disclosureWeekly') a = ['4,99 €', n % 2 ? { n, unit: units[n % 4] } : null];
+        else if (key === 'proOnBody') a = [n % 2 === 1];
+        else if (key === 'trialTitle' || key === 'freeLabel') a = [n, units[n % 4]];
+        else if (textFirst.includes(key)) a = ['4,99 €'];
+        out.push([`${key}(${a.map((x) => JSON.stringify(x)).join(', ')})`, v(...a)]);
+      }
+    } else if (v && typeof v === 'object') for (const [k, name] of Object.entries(v)) out.push([`${key}.${k}`, name]);
+  }
+  return out;
+};
+
+test('languages: every language has every string English has, of the same kind', () => {
+  const en = I.strings('en');
+  for (const l of I.LANGS) {
+    const s = I.strings(l);
+    assert.deepEqual(Object.keys(s).sort(), Object.keys(en).sort(), l);
+    for (const k of Object.keys(en)) {
+      assert.equal(typeof s[k], typeof en[k], `${l}.${k}`);
+      if (typeof en[k] === 'function') assert.equal(s[k].length, en[k].length, `${l}.${k} arguments`);
+    }
+    assert.deepEqual(Object.keys(s.languageNames).sort(), Object.keys(en.languageNames).sort(), `${l} language names`);
+  }
+});
+
+test('languages: no em dashes, no exclamation marks, no empty or broken text, in any language', () => {
+  I.setLocale('en-US', 'en');
+  for (const l of I.LANGS) {
+    for (const [key, text] of allStrings(I.strings(l))) {
+      assert.equal(typeof text, 'string', `${l} ${key}`);
+      assert.ok(text.trim().length > 0, `${l} ${key} is empty`);
+      assert.ok(!text.includes('\u2014'), `${l} ${key} has an em dash: ${text}`);
+      assert.ok(!text.includes('!'), `${l} ${key} has an exclamation mark: ${text}`);
+      assert.ok(!/undefined|NaN|\[object|\$\{/.test(text), `${l} ${key}: ${text}`);
+      assert.ok(!/  /.test(text), `${l} ${key} has a double space: ${text}`);
+    }
+  }
+  // The words the copy voice rules out, in English.
+  for (const [key, text] of allStrings(I.strings('en'))) assert.ok(!/\b(Unlock|Premium|Seamless|Effortless|Welcome|Let's)\b/.test(text), key);
+});
+
+test('languages: the subscription disclosure carries the prices, the trial and the 24 hours in every language', () => {
+  for (const l of I.LANGS) {
+    const s = I.strings(l);
+    const yearly = s.disclosureYearly('29,99 €');
+    const weekly = s.disclosureWeekly('4,99 €', { n: 3, unit: 'DAY' });
+    const plain = s.disclosureWeekly('4,99 €', null);
+    assert.ok(yearly.includes('29,99 €'), l);
+    assert.ok(weekly.includes('4,99 €') && weekly.includes('3'), l);
+    assert.ok(plain.includes('4,99 €') && !plain.includes('3'), l);
+    assert.ok(weekly.length > plain.length, `${l}: the trial sentence is added only with a trial`);
+    assert.ok(s.disclosureTail.includes('24'), l);
+    assert.ok(/Apple/.test(s.disclosureTail), l);
+    // The links keep their own names in every language.
+    assert.ok(s.terms.includes('EULA') || s.terms.includes('CLUF'), l);
+    assert.ok(s.privacy.length > 0, l);
+  }
+  assert.equal(
+    I.strings('en').disclosureWeekly('$4.99', { n: 3, unit: 'DAY' }),
+    'Weekly $4.99/week is an auto-renewing subscription billed once a week until cancelled; it starts with 3 days free and you are not charged until the trial ends.'
+  );
+  assert.equal(I.strings('en').headlineWithTrial('Image to Text Pro.', 3, 'DAY'), 'Image to Text Pro. 3 days free first.');
+  assert.equal(I.strings('en').freeLabel(1, 'WEEK'), '1 week free');
+});
+
+test('languages: the device language picks the strings; anything else is English; dates and numbers follow the device', () => {
+  I.setLocale('de-DE', 'de');
+  assert.equal(I.lang(), 'de');
+  assert.equal(I.t().copied(1204), 'Kopiert. 1.204 Wörter.');
+  assert.equal(I.t().copied(1), 'Kopiert. 1 Wort.');
+  const at = new Date(2026, 10, 17, 14, 41).getTime();
+  assert.equal(I.whenLabel(at, at + 60_000), 'Heute, 14:41');
+  assert.equal(I.whenLabel(at, at + 86_400_000), 'Gestern, 14:41');
+  assert.equal(I.whenLabel(new Date(2025, 2, 3).getTime(), at), '3. März 2025');
+  assert.equal(I.longDate(new Date(2026, 10, 17)), '17. November 2026');
+  I.setLocale('fr-FR', 'fr');
+  assert.equal(I.t().copied(0), 'Copié. 0 mot.'); // French: zero is singular
+  assert.equal(I.t().pages(2), '2 pages');
+  assert.equal(I.t().freeLeft(1, 3), 'Encore 1 scan gratuit sur 3 aujourd’hui');
+  I.setLocale('es-MX', 'es');
+  assert.equal(I.lang(), 'es');
+  assert.equal(I.t().freeLeft(1, 3), 'Te queda 1 de 3 escaneos gratis hoy');
+  I.setLocale('it-IT', 'it');
+  assert.equal(I.t().trialTitle(3, 'DAY'), 'Provalo gratis per 3\u00a0giorni.'); // a non-breaking space keeps 3 with its unit
+  I.setLocale('pl-PL', 'pl');
+  assert.equal(I.lang(), 'en'); // a language the app does not speak: English
+  assert.equal(I.t().continue, 'Continue');
+  I.setLocale('en-US', 'en');
+  assert.equal(I.whenLabel(at, at + 60_000), 'Today, 2:41 pm'); // as before
+  I.setLocale(null, null);
+  assert.equal(I.lang(), 'en');
+  I.setLocale('en-US', 'en');
+});
+
+test('languages: reading languages default to the phone’s own Latin-alphabet languages plus English', () => {
+  assert.deepEqual(A.deviceReadingLanguages(['en']), ['en-US']); // an English iPhone reads as before
+  assert.deepEqual(A.deviceReadingLanguages(['de', 'en']), ['de-DE', 'en-US']);
+  assert.deepEqual(A.deviceReadingLanguages(['fr']), ['fr-FR', 'en-US']);
+  assert.deepEqual(A.deviceReadingLanguages(['es', 'it', 'de', 'fr']), ['es-ES', 'it-IT', 'de-DE', 'en-US']); // at most three, phone order
+  assert.deepEqual(A.deviceReadingLanguages(['ja', 'it']), ['it-IT', 'en-US']); // other alphabets stay a choice in Settings
+  assert.deepEqual(A.deviceReadingLanguages([]), ['en-US']);
+  assert.deepEqual(A.deviceReadingLanguages([null, 'DE']), ['de-DE', 'en-US']);
+  for (const list of [['de-DE', 'en-US'], ['fr-FR', 'en-US'], ['es-ES', 'it-IT', 'en-US']]) {
+    assert.equal(A.latinOnly(list), true);
+    assert.equal(A.autoDetectLanguage(list), false); // read as given, language correction on
+  }
+});
+
+// What German, French, Spanish and Italian pages read as: accents, the
+// sharp s, inverted marks and apostrophes all pass through every step.
+const EU_LINES = [
+  'Straße, Größe, Äpfel und Übermaß: Grüße aus Köln.',
+  'Ça coûte 4,50 € ; où est la crème brûlée ?',
+  '¿Dónde está la señora Muñoz? ¡Mañana!',
+  'Perché è così? L’università è più su.',
+];
+
+test('languages: accented letters and the sharp s are kept by every text step', () => {
+  for (const text of EU_LINES) {
+    assert.equal(A.offScript(text), false, text);
+    assert.equal(A.maskOffScript(text), text);
+    assert.equal(T.fixLine(text), text);
+    for (const tok of text.split(' ')) assert.notEqual(A.nudgeWordKind(tok, false), 'odd', tok);
+  }
+  const lines = EU_LINES.map((t, i) => line(t, { y: ys(i), w: 760 }));
+  const paras = P.groupParagraphs(P.orderLines(lines, W, H), W, H).map((p) => p.lines);
+  const raw = T.modelText(T.buildRuns(paras, false));
+  for (const text of EU_LINES) assert.ok(raw.includes(text), text);
+  // A German word split at a line end joins without its hyphen; German capitals are not list items.
+  assert.equal(T.joinPair('die Straßen-', 'bahn fährt'), 'die Straßenbahn fährt');
+  assert.equal(T.joinPair('der Kinder-', 'garten'), 'der Kindergarten');
+  assert.equal(T.LIST_MARKER.test('Äpfel kaufen'), false);
+  assert.equal(T.countWords('Größe für Grüße'), 3);
+  assert.equal(T.fileBaseName('Einkaufsliste für Köln', '2026-11-17', 'Scan'), 'Einkaufsliste für Köln');
+  assert.equal(T.fileBaseName('...', '2026-11-17', 'Escaneo'), 'Escaneo 2026-11-17');
 });
 
 // ---------- page outlines (build 2) ----------

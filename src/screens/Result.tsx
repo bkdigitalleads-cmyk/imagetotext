@@ -7,7 +7,7 @@ import { deleteDoc, deletePage, Doc, getDoc, markNudgeSeen, Page, reorderPages, 
 import { removeFiles, scanUri } from '../files';
 import { docText, pageRuns, pageText } from '../ocr';
 import { copyText, exportFile, ExportKind, shareText } from '../exporting';
-import { copiedLine, countWords, firstLine, moveItem, Run } from '../text';
+import { countWords, firstLine, moveItem, Run } from '../text';
 import { maybeRequestReview } from '../reviews';
 import { FREE_MAX_PAGES } from '../quota';
 import Glyph, { GlyphName } from '../ui/Glyph';
@@ -17,7 +17,7 @@ import { GlyphButton, Tap, ToolButton, TopBar, WordButton } from '../ui/Tap';
 import DragList from '../ui/DragList';
 import { copyHaptic, tick } from '../ui/motion';
 import PdfPreview from './PdfPreview';
-import { whenLabel } from './Home';
+import { t, whenLabel } from '../i18n';
 import type { SourceKind } from '../../App';
 
 /** Let one sheet finish sliding away before the next opens (iOS presents one at a time). */
@@ -43,6 +43,7 @@ export default function ResultScreen({
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { isPro, showPaywall, dataVersion, bumpData, say } = useApp();
+  const s = t();
   const [doc, setDoc] = useState<Doc | null>(null);
   const [editing, setEditing] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -83,16 +84,16 @@ export default function ResultScreen({
 
   const onCopy = async () => {
     const text = allText();
-    if (!text) return say('Nothing to copy on this one yet.');
-    if (!(await copyText(text))) return say('That did not copy. Try once more.');
+    if (!text) return say(s.nothingToCopy);
+    if (!(await copyText(text))) return say(s.didNotCopy);
     copyHaptic();
-    say(copiedLine(countWords(text)));
+    say(s.copied(countWords(text)));
     maybeRequestReview('firstCopy');
   };
 
   const onShare = async () => {
     const text = allText();
-    if (!text) return say('Nothing to share on this one yet.');
+    if (!text) return say(s.nothingToShare);
     await shareText(text).catch(() => {});
   };
 
@@ -113,7 +114,7 @@ export default function ResultScreen({
       return;
     }
     after(() => {
-      exportFile(kind, pageTexts()).catch(() => Alert.alert('The file was not made', 'Try once more.'));
+      exportFile(kind, pageTexts()).catch(() => Alert.alert(s.fileNotMade, s.tryOnceMore));
     });
   };
 
@@ -157,10 +158,10 @@ export default function ResultScreen({
   };
 
   const onDelete = () =>
-    Alert.alert('Delete this scan?', 'The text and the photos come off this iPhone and cannot be brought back.', [
-      { text: 'Keep it', style: 'cancel' },
+    Alert.alert(s.deleteScanTitle, s.deleteScanBody, [
+      { text: s.keepIt, style: 'cancel' },
       {
-        text: 'Delete',
+        text: s.delete,
         style: 'destructive',
         onPress: async () => {
           removeFiles(await deleteDoc(doc.id));
@@ -180,10 +181,10 @@ export default function ResultScreen({
   };
 
   const onDeletePage = (p: Page, i: number) =>
-    Alert.alert(`Delete page ${i + 1}?`, 'Its text and photo come off this iPhone.', [
-      { text: 'Keep it', style: 'cancel' },
+    Alert.alert(s.deletePageTitle(i + 1), s.deletePageBody, [
+      { text: s.keepIt, style: 'cancel' },
       {
-        text: 'Delete page',
+        text: s.deletePage,
         style: 'destructive',
         onPress: async () => {
           removeFiles(await deletePage(p.id));
@@ -202,17 +203,17 @@ export default function ResultScreen({
 
   // ---------- drawing ----------
 
-  const meta = `${whenLabel(doc.createdAt)} · ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`;
+  const meta = `${whenLabel(doc.createdAt)} · ${s.pages(pages.length)}`;
 
   return (
     <View style={{ flex: 1 }}>
       <TopBar
         theme={theme}
-        back={{ label: 'Scans', onPress: async () => (editing ? (await saveDrafts(), onBack()) : onBack()) }}
+        back={{ label: s.scansBack, onPress: async () => (editing ? (await saveDrafts(), onBack()) : onBack()) }}
         right={
           <View style={styles.topRight}>
-            <WordButton theme={theme} label={editing ? 'Done' : 'Edit'} onPress={toggleEdit} strong={editing} />
-            {!editing && <GlyphButton theme={theme} glyph="trash" label="Delete this scan" onPress={onDelete} color={theme.inkSoft} />}
+            <WordButton theme={theme} label={editing ? s.done : s.edit} onPress={toggleEdit} strong={editing} />
+            {!editing && <GlyphButton theme={theme} glyph="trash" label={s.deleteThisScan} onPress={onDelete} color={theme.inkSoft} />}
           </View>
         }
       />
@@ -228,7 +229,7 @@ export default function ResultScreen({
                   key={p.id}
                   onPress={() => scroll.current?.scrollTo({ y: Math.max(0, (pageY.current[p.id] ?? 0) - 8), animated: true })}
                   accessibilityRole="button"
-                  accessibilityLabel={`Page ${i + 1}`}
+                  accessibilityLabel={s.page(i + 1)}
                   style={styles.stripItem}
                 >
                   <Leaf theme={theme} uri={scanUri(p.thumb)} width={52} />
@@ -237,15 +238,18 @@ export default function ResultScreen({
               ))}
             </ScrollView>
             <View style={styles.stripActions}>
-              <WordButton theme={theme} label="Reorder pages" onPress={() => setTray('pages')} color={theme.inkSoft} />
+              <WordButton theme={theme} label={s.reorderPages} onPress={() => setTray('pages')} color={theme.inkSoft} />
             </View>
           </View>
         )}
 
         <View style={[styles.cleanRow, { borderColor: theme.rule }]}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.cleanLabel, { color: theme.ink }]}>Clean up</Text>
-            <Text style={[styles.cleanSub, { color: theme.inkFaint }]}>Joins broken lines into paragraphs and fixes double spaces{isPro ? '' : '. Pro'}</Text>
+            <Text style={[styles.cleanLabel, { color: theme.ink }]}>{s.cleanUp}</Text>
+            <Text style={[styles.cleanSub, { color: theme.inkFaint }]}>
+              {s.cleanUpSub}
+              {isPro ? '' : '. Pro'}
+            </Text>
           </View>
           <Switch
             value={clean}
@@ -253,24 +257,23 @@ export default function ResultScreen({
             trackColor={{ true: theme.ink, false: theme.rule }}
             thumbColor={theme.thumb}
             ios_backgroundColor={theme.rule}
-            accessibilityLabel="Clean up"
-            accessibilityHint="Joins broken lines into paragraphs and fixes double spaces"
+            accessibilityLabel={s.cleanUp}
+            accessibilityHint={s.cleanUpSub}
           />
         </View>
 
         {pages.map((p, i) => (
           <View key={p.id} onLayout={(e) => (pageY.current[p.id] = e.nativeEvent.layout.y)} style={styles.page}>
-            {pages.length > 1 && <Text style={[styles.pageLabel, { color: theme.inkFaint }, tabular]}>Page {i + 1}</Text>}
+            {pages.length > 1 && <Text style={[styles.pageLabel, { color: theme.inkFaint }, tabular]}>{s.page(i + 1)}</Text>}
             {nudges[p.id] && !editing && (
               <SlipNote
                 theme={theme}
                 text={
-                  isBlurry(p.sharpness)
-                    ? 'Some words were hard to read, and the photo looks out of focus. Hold still and tap the page to focus.'
-                    : 'Some words were hard to read. A closer, flatter photo usually fixes it.'
+                  isBlurry(p.sharpness) ? s.nudgeBlurry : s.nudge
                 }
+                closeLabel={s.dismiss}
                 action={{
-                  label: 'Retake',
+                  label: s.retake,
                   onPress: () => {
                     setNudges((n) => ({ ...n, [p.id]: false }));
                     onRetake(p);
@@ -288,39 +291,39 @@ export default function ResultScreen({
                 selectionColor={theme.highlight}
                 scrollEnabled={false}
                 autoCorrect
-                accessibilityLabel={pages.length > 1 ? `Text of page ${i + 1}` : 'Text'}
+                accessibilityLabel={pages.length > 1 ? s.textOfPage(i + 1) : s.textLabel}
               />
             ) : (
               <PageText theme={theme} page={p} clean={clean} picked={picked?.page.id === p.id ? picked.index : -1} onWord={(run, index) => setPicked({ page: p, run, index })} />
             )}
             {!editing && p.editedText != null && (
-              <WordButton theme={theme} label="Use the text as read" onPress={() => backToRead(p)} color={theme.inkFaint} />
+              <WordButton theme={theme} label={s.useAsRead} onPress={() => backToRead(p)} color={theme.inkFaint} />
             )}
           </View>
         ))}
       </ScrollView>
 
       <View style={[styles.toolbar, { borderTopColor: theme.rule, backgroundColor: theme.bg, paddingBottom: Math.max(insets.bottom, 8) }]}>
-        <ToolButton theme={theme} glyph="copy" label="Copy all" onPress={onCopy} />
-        <ToolButton theme={theme} glyph="share" label="Share" onPress={onShare} a11y="Share the text" />
-        <ToolButton theme={theme} glyph="export" label="Export" onPress={() => setTray('export')} tag={isPro ? undefined : 'Pro'} />
-        <ToolButton theme={theme} glyph="addPage" label="Add page" onPress={askAdd} />
+        <ToolButton theme={theme} glyph="copy" label={s.copyAll} onPress={onCopy} />
+        <ToolButton theme={theme} glyph="share" label={s.share} onPress={onShare} a11y={s.shareA11y} />
+        <ToolButton theme={theme} glyph="export" label={s.export} onPress={() => setTray('export')} tag={isPro ? undefined : 'Pro'} />
+        <ToolButton theme={theme} glyph="addPage" label={s.addPage} onPress={askAdd} />
       </View>
 
-      <Tray theme={theme} visible={tray === 'export'} onClose={() => setTray(null)} title="Export">
-        <TrayChoice theme={theme} glyph="export" label="Plain text" ext=".txt" sub="Opens anywhere" tag={!isPro} onPress={() => onExport('txt')} />
-        <TrayChoice theme={theme} glyph="export" label="PDF" ext=".pdf" sub={isPro ? 'A clean page to print or send' : 'See it first'} tag={!isPro} onPress={() => onExport('pdf')} />
-        <TrayChoice theme={theme} glyph="export" label="Markdown" ext=".md" sub="For notes apps" tag={!isPro} onPress={() => onExport('md')} />
+      <Tray theme={theme} visible={tray === 'export'} onClose={() => setTray(null)} title={s.export}>
+        <TrayChoice theme={theme} glyph="export" label={s.plainText} ext=".txt" sub={s.opensAnywhere} tag={!isPro} onPress={() => onExport('txt')} />
+        <TrayChoice theme={theme} glyph="export" label={s.pdf} ext=".pdf" sub={isPro ? s.pdfSubPro : s.pdfSubFree} tag={!isPro} onPress={() => onExport('pdf')} />
+        <TrayChoice theme={theme} glyph="export" label={s.markdown} ext=".md" sub={s.forNotesApps} tag={!isPro} onPress={() => onExport('md')} />
       </Tray>
 
-      <Tray theme={theme} visible={tray === 'add'} onClose={() => setTray(null)} title="Add a page">
-        <TrayChoice theme={theme} glyph="camera" label="Scan" onPress={() => onAdd('scan')} />
-        <TrayChoice theme={theme} glyph="picture" label="Photos" onPress={() => onAdd('photos')} />
-        <TrayChoice theme={theme} glyph="folder" label="Files" onPress={() => onAdd('files')} />
+      <Tray theme={theme} visible={tray === 'add'} onClose={() => setTray(null)} title={s.addAPage}>
+        <TrayChoice theme={theme} glyph="camera" label={s.scan} onPress={() => onAdd('scan')} />
+        <TrayChoice theme={theme} glyph="picture" label={s.photos} onPress={() => onAdd('photos')} />
+        <TrayChoice theme={theme} glyph="folder" label={s.files} onPress={() => onAdd('files')} />
       </Tray>
 
-      <Tray theme={theme} visible={tray === 'pages'} onClose={() => setTray(null)} title="Pages">
-        <Text style={[styles.trayNote, { color: theme.inkSoft }]}>Drag the grip to change the order. Export follows it.</Text>
+      <Tray theme={theme} visible={tray === 'pages'} onClose={() => setTray(null)} title={s.pagesTitle}>
+        <Text style={[styles.trayNote, { color: theme.inkSoft }]}>{s.dragGrip}</Text>
         <Rule theme={theme} />
         <ScrollView style={{ maxHeight: 420 }} scrollEnabled={pages.length > 5}>
           <DragList
@@ -329,17 +332,17 @@ export default function ResultScreen({
             keyOf={(p) => String(p.id)}
             rowHeight={84}
             onMove={onMove}
-            labelOf={(p, i) => `Page ${i + 1}, ${firstLine(pageText(p, clean), 40) || 'no text'}`}
+            labelOf={(p, i) => s.pageRow(i + 1, firstLine(pageText(p, clean), 40))}
             renderRow={(p, i) => (
               <View style={styles.pageRow}>
                 <Leaf theme={theme} uri={scanUri(p.thumb)} width={44} />
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.pageRowTitle, { color: theme.ink }, tabular]}>Page {i + 1}</Text>
+                  <Text style={[styles.pageRowTitle, { color: theme.ink }, tabular]}>{s.page(i + 1)}</Text>
                   <Text style={[styles.pageRowSub, { color: theme.inkFaint }]} numberOfLines={1}>
-                    {firstLine(pageText(p, clean), 40) || 'No text found'}
+                    {firstLine(pageText(p, clean), 40) || s.noTextFound}
                   </Text>
                 </View>
-                <GlyphButton theme={theme} glyph="trash" label={`Delete page ${i + 1}`} onPress={() => onDeletePage(p, i)} color={theme.inkFaint} />
+                <GlyphButton theme={theme} glyph="trash" label={s.deletePageN(i + 1)} onPress={() => onDeletePage(p, i)} color={theme.inkFaint} />
               </View>
             )}
           />
@@ -382,7 +385,7 @@ function PageText({ theme, page, clean, picked, onWord }: { theme: Theme; page: 
     );
   }
   if (runs.length === 0) {
-    return <Text style={[styles.nothing, { color: theme.inkFaint }]}>Nothing to read on this page. More light, or a little closer, usually does it.</Text>;
+    return <Text style={[styles.nothing, { color: theme.inkFaint }]}>{t().nothingOnPage}</Text>;
   }
   // Split into paragraphs where a run ends with a blank line.
   const paragraphs: { run: Run; index: number }[][] = [[]];
@@ -395,7 +398,7 @@ function PageText({ theme, page, clean, picked, onWord }: { theme: Theme; page: 
       {paragraphs
         .filter((p) => p.length > 0)
         .map((para, i) => (
-          <Text key={i} style={[styles.reading, { color: theme.ink }]} accessibilityHint="Double tap a word to see it in the photo">
+          <Text key={i} style={[styles.reading, { color: theme.ink }]} accessibilityHint={t().wordHint}>
             {para.map(({ run: r, index }) => {
               const on = picked === index;
               return (
@@ -456,7 +459,7 @@ function SourceTray({ theme, picked, onClose, onEdit }: { theme: Theme; picked: 
       </View>
     );
   } else if (picked) {
-    body = <Text style={[styles.trayNote, { color: theme.inkSoft }]}>The photo was not kept, so there is nothing to show. Keep the original photos in Settings to see where words came from.</Text>;
+    body = <Text style={[styles.trayNote, { color: theme.inkSoft }]}>{t().photoNotKept}</Text>;
   }
 
   return (
@@ -465,12 +468,12 @@ function SourceTray({ theme, picked, onClose, onEdit }: { theme: Theme; picked: 
         <Text style={[styles.sourceWord, { color: theme.ink }]} numberOfLines={1}>
           {run?.text}
         </Text>
-        <Text style={[styles.sourceNote, { color: theme.inkFaint }]}>{run?.unsure ? 'Worth a look: this word was hard to read.' : 'Where it was on the page'}</Text>
+        <Text style={[styles.sourceNote, { color: theme.inkFaint }]}>{run?.unsure ? t().worthALook : t().whereOnPage}</Text>
       </View>
       {body}
       <View style={styles.sourceActions}>
-        <WordButton theme={theme} label="Fix the text" onPress={onEdit} />
-        <WordButton theme={theme} label="Close" onPress={onClose} color={theme.inkSoft} />
+        <WordButton theme={theme} label={t().fixText} onPress={onEdit} />
+        <WordButton theme={theme} label={t().close} onPress={onClose} color={theme.inkSoft} />
       </View>
     </Tray>
   );
@@ -499,7 +502,7 @@ function TrayChoice({
       style={[styles.choice, { borderBottomColor: theme.rule }]}
       pressedStyle={{ backgroundColor: theme.sunk }}
       accessibilityRole="button"
-      accessibilityLabel={`${label}${ext ? `, ${ext}` : ''}${tag ? ', needs Pro' : ''}`}
+      accessibilityLabel={`${label}${ext ? `, ${ext}` : ''}${tag ? `, ${t().needsPro}` : ''}`}
       accessibilityHint={sub}
     >
       <Glyph name={glyph} size={28} color={theme.ink} />

@@ -5,7 +5,7 @@ import { PurchasesOffering, PurchasesPackage } from 'react-native-purchases';
 import { useTheme, fonts, radius, tabular, Theme } from '../theme';
 import { useApp, PaywallReason } from '../state';
 import { getOffering, purchasePackage, restorePurchases, isBillingAvailable } from '../purchases';
-import { getTrialEligibleIds, trialLabel } from '../trial';
+import { getTrialEligibleIds, trialOf } from '../trial';
 import { cancelTrialReminder, scheduleTrialReminderIfTrial } from '../reminder';
 import { planOrder, preselect, PlanType } from '../offer';
 import { FREE_DAILY_RECOGNITIONS, FREE_MAX_PAGES } from '../quota';
@@ -13,33 +13,27 @@ import { TERMS_URL } from '../links';
 import { CleanUpPair } from '../ui/Drawings';
 import Glyph from '../ui/Glyph';
 import { GlyphButton, LiveButton, Tap } from '../ui/Tap';
+import { lang, locale, t } from '../i18n';
 
 /** On the first-launch paywall the close button appears after this delay. */
 const ONBOARDING_CLOSE_DELAY_MS = 3000;
 
 /** The headline and one line, by why the paywall opened. */
-const REASON: Record<PaywallReason, { title: string; line: string }> = {
-  limit: {
-    title: `That was today’s ${FREE_DAILY_RECOGNITIONS} free scans.`,
-    line: 'Pro reads as many pages as you like, any day.',
-  },
-  export: {
-    title: 'Export to .txt, .pdf and .md.',
-    line: 'Clean files named after the first line, ready to send or keep.',
-  },
-  cleanup: {
-    title: 'One switch for the line breaks.',
-    line: 'Clean up joins broken lines into paragraphs and fixes double spaces.',
-  },
-  batch: {
-    title: 'Every page in one document.',
-    line: `Free documents hold ${FREE_MAX_PAGES} pages. Pro holds the whole stack and exports it as one file.`,
-  },
-  pro: {
-    title: 'Image to Text Pro.',
-    line: 'Scan as much as you like, clean it up, and export it.',
-  },
-};
+function reasonCopy(reason: PaywallReason): { title: string; line: string } {
+  const s = t();
+  switch (reason) {
+    case 'limit':
+      return { title: s.limitTitle(FREE_DAILY_RECOGNITIONS), line: s.limitLine };
+    case 'export':
+      return { title: s.exportTitle, line: s.exportLine };
+    case 'cleanup':
+      return { title: s.cleanupTitle, line: s.cleanupLine };
+    case 'batch':
+      return { title: s.batchTitle, line: s.batchLine(FREE_MAX_PAGES) };
+    default:
+      return { title: s.proTitle, line: s.proLine };
+  }
+}
 
 const typeOf = (p: PurchasesPackage): PlanType | null =>
   p.packageType === 'WEEKLY' ? 'WEEKLY' : p.packageType === 'ANNUAL' ? 'ANNUAL' : null;
@@ -62,8 +56,10 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
   // Both plans, Continue and the legal footer must fit without scrolling on
   // a 375x667 phone; below 760 pt the hero shrinks.
   const { height } = useWindowDimensions();
-  const compact = height < 760;
+  // The other languages run longer (the disclosure above all), so they use the compact layout everywhere.
+  const compact = height < 760 || lang() !== 'en';
   const { paywall, hidePaywall, setIsPro } = useApp();
+  const s = t();
   const visible = paywall != null;
   const reason: PaywallReason = onboarding ? 'pro' : paywall ?? 'pro';
   const [offering, setOffering] = useState<PurchasesOffering | null>(null);
@@ -106,12 +102,13 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
       hidePaywall();
       // Only does anything when this purchase started a free trial and notifications are allowed.
       const reminded = await scheduleTrialReminderIfTrial();
-      Alert.alert('Pro is on', `Scan as much as you like.${reminded ? ' We will remind you the day before the trial ends.' : ''}`);
+      Alert.alert(s.proIsOn, s.proOnBody(reminded));
     } else if (res.ok) {
       // The store took the purchase but Pro isn't showing yet (it can lag).
-      Alert.alert('Paid, but Pro is not showing', 'The App Store can lag a minute. Tap Restore purchases in a moment and it turns on.');
+      Alert.alert(s.paidNotShowing, s.paidNotShowingBody);
     } else if (!res.userCancelled && res.error) {
-      Alert.alert('The purchase did not go through', res.error);
+      // The store's own error text is English; other languages get the plain line.
+      Alert.alert(s.purchaseFailed, lang() === 'en' ? res.error : s.purchaseFailedBody);
     }
   };
 
@@ -124,11 +121,11 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
     if (res.ok && res.isPro) {
       setIsPro(true);
       hidePaywall();
-      Alert.alert('Pro is back on', 'Everything is open again.');
+      Alert.alert(s.proBackOn, s.everythingOpen);
     } else if (res.ok) {
-      Alert.alert('Nothing to restore', 'This Apple ID has no Image to Text Pro purchase.');
+      Alert.alert(s.nothingToRestore, s.noPurchase);
     } else {
-      Alert.alert('Restore did not work', res.error ?? 'Try once more.');
+      Alert.alert(s.restoreFailed, (lang() === 'en' && res.error) || s.tryOnceMore);
     }
   };
 
@@ -138,28 +135,28 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
     .sort((a, b) => order.indexOf(typeOf(a) as PlanType) - order.indexOf(typeOf(b) as PlanType));
   const weeklyPkg = packages.find((p) => typeOf(p) === 'WEEKLY');
   const yearlyPkg = packages.find((p) => typeOf(p) === 'ANNUAL');
-  const weeklyTrial = trialLabel(weeklyPkg, trialEligible);
+  const weeklyTrial = trialOf(weeklyPkg, trialEligible);
   // Trial wording in the headline, plan rows and button area: onboarding only.
   const shownTrial = onboarding ? weeklyTrial : null;
 
-  const money = (n: number, cur?: string) => n.toLocaleString(undefined, { style: 'currency', currency: cur ?? 'USD' });
-  const yearlyPerWeek = yearlyPkg?.product.price ? `${money(yearlyPkg.product.price / 52, yearlyPkg.product.currencyCode)} a week` : null;
+  // The yearly price per week, worked out from StoreKit's price and currency, in the device's number format.
+  const money = (n: number, cur?: string) => {
+    try {
+      return n.toLocaleString(locale(), { style: 'currency', currency: cur ?? 'USD' });
+    } catch {
+      return n.toLocaleString(undefined, { style: 'currency', currency: cur ?? 'USD' });
+    }
+  };
+  const yearlyPerWeek = yearlyPkg?.product.price ? s.perWeek(money(yearlyPkg.product.price / 52, yearlyPkg.product.currencyCode)) : null;
 
   // Always-visible 3.1.2(c) disclosure, built from whatever StoreKit returned.
   const parts: string[] = [];
-  if (yearlyPkg) parts.push(`Yearly ${yearlyPkg.product.priceString}/year is an auto-renewing subscription billed once a year until cancelled.`);
-  if (weeklyPkg)
-    parts.push(
-      `Weekly ${weeklyPkg.product.priceString}/week is an auto-renewing subscription billed once a week until cancelled${
-        weeklyTrial ? `; it starts with ${weeklyTrial} and you are not charged until the trial ends` : ''
-      }.`
-    );
-  const disclosure =
-    (parts.length > 0 ? parts.join(' ') : 'Pro is offered as a weekly or a yearly auto-renewing subscription.') +
-    ' Payment is charged to your Apple ID. Cancel anytime in your Apple ID settings at least 24 hours before the period ends.';
+  if (yearlyPkg) parts.push(s.disclosureYearly(yearlyPkg.product.priceString));
+  if (weeklyPkg) parts.push(s.disclosureWeekly(weeklyPkg.product.priceString, weeklyTrial));
+  const disclosure = `${parts.length > 0 ? parts.join(' ') : s.disclosureNoProducts} ${s.disclosureTail}`;
 
-  const copy = REASON[reason];
-  const headline = shownTrial ? `${copy.title} ${shownTrial[0].toUpperCase()}${shownTrial.slice(1)} first.` : copy.title;
+  const copy = reasonCopy(reason);
+  const headline = shownTrial ? s.headlineWithTrial(copy.title, shownTrial.n, shownTrial.unit) : copy.title;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => canClose && hidePaywall()}>
@@ -167,7 +164,7 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
         <ScrollView contentContainerStyle={styles.scroll}>
           {/* Holds its space while hidden so nothing jumps when the close button appears. */}
           <View style={[styles.closeRow, { opacity: canClose ? 1 : 0 }]} accessibilityElementsHidden={!canClose} importantForAccessibility={canClose ? 'auto' : 'no-hide-descendants'}>
-            <GlyphButton theme={theme} glyph="close" label="Close" onPress={hidePaywall} disabled={!canClose} />
+            <GlyphButton theme={theme} glyph="close" label={s.close} onPress={hidePaywall} disabled={!canClose} />
           </View>
 
           <CleanUpPair theme={theme} compact={compact} />
@@ -177,25 +174,25 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
           </Text>
           <Text style={[styles.line, { color: theme.inkSoft }]}>{copy.line}</Text>
           <Text style={[styles.what, { color: theme.inkSoft }]}>
-            Pro: unlimited scans, Clean up, .txt, .pdf and .md files, and documents of any length.
+            {s.proWhat}
           </Text>
 
           {loading ? (
             <ActivityIndicator style={{ marginVertical: 24 }} color={theme.ink} />
           ) : packages.length === 0 || !isBillingAvailable() ? (
-            <Text style={[styles.unavailable, { color: theme.inkSoft }]}>The App Store is not answering right now. Try again in a bit.</Text>
+            <Text style={[styles.unavailable, { color: theme.inkSoft }]}>{s.storeNotAnsweringNow}</Text>
           ) : (
             <View style={[styles.plans, compact && { marginTop: 14 }, { borderTopColor: theme.rule }]} accessibilityRole="radiogroup">
               {packages.map((p) => {
                 const on = selected?.identifier === p.identifier;
                 const yearly = typeOf(p) === 'ANNUAL';
-                const title = yearly ? (onboarding ? 'Yearly' : 'Yearly, best value') : 'Weekly';
+                const title = yearly ? (onboarding ? s.yearly : s.yearlyBest) : s.weekly;
                 // 3.1.2(c) on the row itself: trial length, then the price after it.
                 const line = yearly
-                  ? `${p.product.priceString} a year${yearlyPerWeek ? `, ${yearlyPerWeek}` : ''}`
+                  ? `${s.perYear(p.product.priceString)}${yearlyPerWeek ? `, ${yearlyPerWeek}` : ''}`
                   : shownTrial
-                    ? `${shownTrial}, then ${p.product.priceString} a week`
-                    : `${p.product.priceString} a week`;
+                    ? s.trialThenWeekly(shownTrial.n, shownTrial.unit, p.product.priceString)
+                    : s.perWeek(p.product.priceString);
                 return (
                   <Tap
                     key={p.identifier}
@@ -221,11 +218,11 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
 
         <View style={[styles.bottom, { borderTopColor: theme.rule, paddingBottom: Math.max(insets.bottom, 12) }]}>
           {/* The button says Continue, never Subscribe. */}
-          <LiveButton theme={theme} tall label={purchasing ? 'One moment' : 'Continue'} onPress={buy} disabled={purchasing || !selected || loading} />
-          {selected && onboarding && trialLabel(selected, trialEligible) ? (
+          <LiveButton theme={theme} tall label={purchasing ? s.oneMoment : s.continue} onPress={buy} disabled={purchasing || !selected || loading} />
+          {selected && onboarding && trialOf(selected, trialEligible) ? (
             <View style={styles.checkLine}>
               <Glyph name="check" size={18} color={theme.ink} weight={2.2} />
-              <Text style={[styles.checkText, { color: theme.ink }]}>No payment now</Text>
+              <Text style={[styles.checkText, { color: theme.ink }]}>{s.noPaymentNow}</Text>
             </View>
           ) : null}
           {/*
@@ -237,13 +234,13 @@ export default function PaywallModal({ privacyUrl, onboarding = false }: { priva
           <Text style={[styles.legalText, { color: theme.inkFaint }]}>Image to Text Pro. {disclosure}</Text>
           <View style={styles.legalLinks}>
             <Text style={[styles.legalLink, { color: theme.inkSoft }]} onPress={onRestore} accessibilityRole="button">
-              {restoring ? 'Restoring' : 'Restore purchases'}
+              {restoring ? s.restoring : s.restorePurchases}
             </Text>
             <Text style={[styles.legalLink, { color: theme.inkSoft }]} onPress={() => Linking.openURL(TERMS_URL)} accessibilityRole="link">
-              Terms of Use (EULA)
+              {s.terms}
             </Text>
             <Text style={[styles.legalLink, { color: theme.inkSoft }]} onPress={() => Linking.openURL(privacyUrl)} accessibilityRole="link">
-              Privacy Policy
+              {s.privacy}
             </Text>
           </View>
         </View>

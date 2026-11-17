@@ -14,8 +14,18 @@
       "buildNumber": "6",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "LSApplicationCategoryType": "public.app-category.productivity"
+        "LSApplicationCategoryType": "public.app-category.productivity",
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleLocalizations": ["en", "de", "fr", "es", "it"],
+        "CFBundleAllowMixedLocalizations": true
       }
+    },
+    "locales": {
+      "en": "./locales/en.json",
+      "de": "./locales/de.json",
+      "fr": "./locales/fr.json",
+      "es": "./locales/es.json",
+      "it": "./locales/it.json"
     },
     "android": {
       "package": "com.bwk.imagetotext",

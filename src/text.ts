@@ -384,10 +384,6 @@ export function countWords(text: string): number {
   return (text.match(/\S+/g) ?? []).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
 }
 
-export function copiedLine(words: number): string {
-  return `Copied. ${words.toLocaleString('en-US')} ${words === 1 ? 'word' : 'words'}.`;
-}
-
 /** The first line with any letters or digits, for the history list. */
 export function firstLine(text: string, max = 80): string {
   const line = text.split('\n').map((l) => l.trim()).find((l) => /[\p{L}\p{N}]/u.test(l)) ?? '';
@@ -397,14 +393,14 @@ export function firstLine(text: string, max = 80): string {
   return (space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd() + '…';
 }
 
-/** A file name from the first line ("Meeting notes Oct 22"), or "Scan 2026-10-22". No extension. */
-export function fileBaseName(text: string, day: string): string {
+/** A file name from the first line ("Meeting notes Oct 22"), or "Scan 2026-10-22" (`scan` is that word in the app's language). No extension. */
+export function fileBaseName(text: string, day: string, scan = 'Scan'): string {
   const raw = firstLine(text, 200)
     .replace(/…$/, '')
     .replace(/[\\/:*?"<>|#%{}^~[\]`\u0000-\u001F]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[.\s]+|[.\s]+$/g, '');
-  if (!raw) return `Scan ${day}`;
+  if (!raw) return `${scan} ${day}`;
   if (raw.length <= 48) return raw;
   const cut = raw.slice(0, 48);
   const space = cut.lastIndexOf(' ');

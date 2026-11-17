@@ -7,6 +7,7 @@ import { getOffering } from '../purchases';
 import { getTrialEligibleIds, trialLabel } from '../trial';
 import { requestReminderPermission } from '../reminder';
 import { trialLength } from '../offer';
+import { t, Unit } from '../i18n';
 import { HandToType, OfflinePhone, PhotoToText, TrialDays } from '../ui/Drawings';
 import Glyph from '../ui/Glyph';
 import { LiveButton } from '../ui/Tap';
@@ -19,18 +20,24 @@ import { LiveButton } from '../ui/Tap';
  *   then the onboarding paywall (close button after 3 seconds).
  * No setup questions: this app has one job.
  */
-const PAGES = [
-  { title: 'A page becomes text in about two seconds.', line: 'Copy it, clean it up, send it on.' },
-  { title: 'Handwriting too, not just print.', line: 'Notes, whiteboards, receipts, letters.' },
-  { title: 'Nothing leaves your phone.', line: 'It reads on the device. No account, works offline.' },
-];
+const pages = () => {
+  const s = t();
+  return [
+    { title: s.welcome1Title, line: s.welcome1Line },
+    { title: s.welcome2Title, line: s.welcome2Line },
+    { title: s.welcome3Title, line: s.welcome3Line },
+  ];
+};
 
 interface TrialOffer {
-  /** "3 days" */
-  length: string;
-  /** "$4.99 a week" */
-  then: string;
+  /** The free trial's length, from StoreKit: 3 and DAY. */
+  n: number;
+  unit: Unit;
+  /** The weekly price string from StoreKit, "$4.99" */
+  price: string;
 }
+
+const UNITS: Unit[] = ['DAY', 'WEEK', 'MONTH', 'YEAR'];
 
 let offerPromise: Promise<TrialOffer | null> | null = null;
 
@@ -40,9 +47,10 @@ async function loadTrialOffer(): Promise<TrialOffer | null> {
   const pkg = off?.weekly;
   if (!pkg) return null;
   if (!trialLabel(pkg, await getTrialEligibleIds([pkg]))) return null;
-  const length = trialLength(pkg.product.introPrice);
-  if (!length) return null;
-  return { length, then: `${pkg.product.priceString} a week` };
+  const intro = pkg.product.introPrice;
+  const unit = intro?.periodUnit?.toUpperCase() as Unit;
+  if (!intro || !trialLength(intro) || !UNITS.includes(unit)) return null;
+  return { n: intro.periodNumberOfUnits, unit, price: pkg.product.priceString };
 }
 
 /** Starts the eligibility check early; it is ready long before the trial screen. */
@@ -59,10 +67,11 @@ export default function Welcome({ onDone }: { onDone: () => void }) {
     trialOffer();
   }, []);
 
-  const next = () => (step < PAGES.length - 1 ? setStep(step + 1) : onDone());
+  const list = pages();
+  const next = () => (step < list.length - 1 ? setStep(step + 1) : onDone());
 
   return (
-    <Page theme={theme} title={PAGES[step].title} line={PAGES[step].line} dots={{ count: PAGES.length, active: step }} button="Continue" onPress={next}>
+    <Page theme={theme} title={list[step].title} line={list[step].line} dots={{ count: list.length, active: step }} button={t().continue} onPress={next}>
       {step === 0 && <PhotoToText theme={theme} />}
       {step === 1 && <HandToType theme={theme} />}
       {step === 2 && <OfflinePhone theme={theme} />}
@@ -102,13 +111,13 @@ export function TrialSteps({ onDone }: { onDone: () => void }) {
     return (
       <Page
         theme={theme}
-        title={`Try it free for ${offer.length}.`}
-        line={`Then ${offer.then}. Cancel in Settings any time before it ends.`}
-        button="Continue"
+        title={t().trialTitle(offer.n, offer.unit)}
+        line={t().trialLine(offer.price)}
+        button={t().continue}
         onPress={() => setStep('remind')}
         noPayment
       >
-        <FreeLabel theme={theme} text={`${offer.length} free`} />
+        <FreeLabel theme={theme} text={t().freeLabel(offer.n, offer.unit)} />
       </Page>
     );
   }
@@ -116,9 +125,9 @@ export function TrialSteps({ onDone }: { onDone: () => void }) {
   return (
     <Page
       theme={theme}
-      title="We’ll remind you the day before it ends."
-      line="One notification, on this phone. Nothing else, ever."
-      button="Continue"
+      title={t().remindTitle}
+      line={t().remindLine}
+      button={t().continue}
       waiting={waiting}
       onPress={async () => {
         // Ask for notifications, then on to the paywall whatever the answer.
@@ -137,7 +146,9 @@ export function TrialSteps({ onDone }: { onDone: () => void }) {
 function FreeLabel({ theme, text }: { theme: Theme; text: string }) {
   return (
     <View style={[styles.label, { backgroundColor: theme.paper, borderColor: theme.rule }]} accessible accessibilityLabel={text}>
-      <Text style={[styles.labelText, { color: theme.ink }]}>{text}</Text>
+      <Text style={[styles.labelText, { color: theme.ink }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.5}>
+        {text}
+      </Text>
       <Svg width={200} height={14} viewBox="0 0 200 14">
         <Path d="M4 8 C 50 3, 110 12, 196 5" stroke={theme.ink} strokeWidth={3} fill="none" strokeLinecap="round" />
       </Svg>
@@ -178,7 +189,7 @@ function Page({
         {line ? <Text style={[styles.line, { color: theme.inkSoft }]}>{line}</Text> : null}
       </View>
       {dots && (
-        <View style={styles.dots} accessible accessibilityLabel={`Page ${dots.active + 1} of ${dots.count}`}>
+        <View style={styles.dots} accessible accessibilityLabel={t().pageOf(dots.active + 1, dots.count)}>
           {Array.from({ length: dots.count }, (_, i) => (
             <View key={i} style={[styles.dot, { backgroundColor: i === dots.active ? theme.ink : theme.rule }, i === dots.active && { width: 22 }]} />
           ))}
@@ -189,7 +200,7 @@ function Page({
         {noPayment && (
           <View style={styles.noPaymentRow}>
             <Glyph name="check" size={18} color={theme.ink} weight={2.2} />
-            <Text style={[styles.noPayment, { color: theme.ink }]}>No payment now</Text>
+            <Text style={[styles.noPayment, { color: theme.ink }]}>{t().noPaymentNow}</Text>
           </View>
         )}
       </View>
@@ -209,5 +220,5 @@ const styles = StyleSheet.create({
   noPaymentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   noPayment: { fontSize: 15, textAlign: 'center', fontWeight: fonts.weight.semibold },
   label: { paddingHorizontal: 28, paddingTop: 22, paddingBottom: 16, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sheet, alignItems: 'center', transform: [{ rotate: '-2deg' }] },
-  labelText: { fontFamily: fonts.display, fontSize: 52, lineHeight: 60 },
+  labelText: { fontFamily: fonts.display, fontSize: 52, lineHeight: 60, textAlign: 'center', maxWidth: 300 },
 });

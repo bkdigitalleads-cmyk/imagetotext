@@ -10,6 +10,7 @@ import Glyph, { GlyphName } from '../ui/Glyph';
 import { GhostLeaf, Leaf } from '../ui/Paper';
 import { Tap } from '../ui/Tap';
 import type { SourceKind } from '../../App';
+import { t, whenLabel } from '../i18n';
 
 /**
  * Home: the three ways in, big enough for a thumb, and every scan below
@@ -36,11 +37,12 @@ export default function HomeScreen({
       .catch(() => setDocs([]));
   }, [dataVersion]);
 
+  const s = t();
   const onLongPress = (d: DocSummary) =>
-    Alert.alert('Delete this scan?', d.title || 'It comes off this iPhone and cannot be brought back.', [
-      { text: 'Keep it', style: 'cancel' },
+    Alert.alert(s.deleteScanTitle, d.title || s.deleteScanHomeBody, [
+      { text: s.keepIt, style: 'cancel' },
       {
-        text: 'Delete',
+        text: s.delete,
         style: 'destructive',
         onPress: async () => {
           removeFiles(await deleteDoc(d.id));
@@ -58,13 +60,13 @@ export default function HomeScreen({
         <Tap
           onPress={onSettings}
           accessibilityRole="button"
-          accessibilityLabel="Settings"
+          accessibilityLabel={s.settings}
           style={styles.settings}
           pressedStyle={{ backgroundColor: theme.sunk }}
         >
           <Glyph name="settings" size={22} color={theme.ink} />
           <Text style={[styles.settingsLabel, { color: theme.ink }]} maxFontSizeMultiplier={1.3} numberOfLines={1}>
-            Settings
+            {s.settings}
           </Text>
         </Tap>
       </View>
@@ -72,38 +74,36 @@ export default function HomeScreen({
       <Tap
         onPress={() => onStart('scan')}
         accessibilityRole="button"
-        accessibilityLabel="Scan"
-        accessibilityHint="Opens the camera to photograph a page"
+        accessibilityLabel={s.scan}
+        accessibilityHint={s.scanHint}
         style={[styles.scan, { backgroundColor: theme.highlight }]}
         pressedStyle={{ transform: [{ scale: 0.985 }], opacity: 0.88 }}
       >
         <Glyph name="camera" size={40} color={theme.onHighlight} weight={2} />
         <View style={{ flex: 1 }}>
           <Text style={[styles.scanLabel, { color: theme.onHighlight }]} maxFontSizeMultiplier={1.5}>
-            Scan
+            {s.scan}
           </Text>
           <Text style={[styles.scanSub, { color: theme.onHighlight }]} maxFontSizeMultiplier={1.4}>
-            A page, a note, a whiteboard
+            {s.scanSub}
           </Text>
         </View>
       </Tap>
 
       <View style={styles.pair}>
-        <Side theme={theme} glyph="picture" label="Photos" hint="Pick photos from your library" onPress={() => onStart('photos')} />
-        <Side theme={theme} glyph="folder" label="Files" hint="Pick images or a PDF from Files" onPress={() => onStart('files')} />
+        <Side theme={theme} glyph="picture" label={s.photos} hint={s.photosHint} onPress={() => onStart('photos')} />
+        <Side theme={theme} glyph="folder" label={s.files} hint={s.filesHint} onPress={() => onStart('files')} />
       </View>
 
       {!isPro && (
         <Text style={[styles.count, { color: theme.inkSoft }, tabular]} accessibilityLiveRegion="polite">
-          {remaining > 0
-            ? `${remaining} of ${FREE_DAILY_RECOGNITIONS} free scans left today`
-            : `Today’s ${FREE_DAILY_RECOGNITIONS} free scans are used. More tomorrow, or any time with Pro.`}
+          {remaining > 0 ? s.freeLeft(remaining, FREE_DAILY_RECOGNITIONS) : s.freeUsed(FREE_DAILY_RECOGNITIONS)}
         </Text>
       )}
 
       {docs && docs.length > 0 && (
         <Text style={[styles.section, { color: theme.ink, borderBottomColor: theme.rule }]} accessibilityRole="header">
-          Your scans
+          {s.yourScans}
         </Text>
       )}
     </View>
@@ -144,25 +144,16 @@ function Empty({ theme }: { theme: Theme }) {
   return (
     <View style={styles.empty}>
       <GhostLeaf theme={theme} width={64} />
-      <Text style={[styles.emptyText, { color: theme.inkSoft }]}>Scans you make land here. The first one takes about two seconds.</Text>
+      <Text style={[styles.emptyText, { color: theme.inkSoft }]}>{t().emptyHome}</Text>
     </View>
   );
 }
 
-export function whenLabel(ms: number, now = Date.now()): string {
-  const d = new Date(ms);
-  const n = new Date(now);
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase();
-  if (d.toDateString() === n.toDateString()) return `Today, ${time}`;
-  const y = new Date(now - 86_400_000);
-  if (d.toDateString() === y.toDateString()) return `Yesterday, ${time}`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== n.getFullYear() ? { year: 'numeric' } : {}) });
-}
-
 function HistoryRow({ theme, doc, onPress, onLongPress }: { theme: Theme; doc: DocSummary; onPress: () => void; onLongPress: () => void }) {
+  const s = t();
   const when = whenLabel(doc.createdAt);
-  const pages = `${doc.pageCount} ${doc.pageCount === 1 ? 'page' : 'pages'}`;
-  const title = doc.title || 'No text found';
+  const pages = s.pages(doc.pageCount);
+  const title = doc.title || s.noTextFound;
   return (
     <Tap
       onPress={onPress}
@@ -171,7 +162,7 @@ function HistoryRow({ theme, doc, onPress, onLongPress }: { theme: Theme; doc: D
       pressedStyle={{ backgroundColor: theme.sunk }}
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${when}, ${pages}`}
-      accessibilityHint="Opens the text. Touch and hold to delete."
+      accessibilityHint={s.rowHint}
     >
       <Leaf theme={theme} uri={scanUri(doc.thumb)} width={46} />
       <View style={{ flex: 1 }}>

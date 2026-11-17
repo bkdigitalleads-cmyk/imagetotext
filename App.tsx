@@ -3,6 +3,8 @@ import { Alert, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
+import { getLocales } from 'expo-localization';
+import { setLocale, t } from './src/i18n';
 import { useTheme, FONT_FILES } from './src/theme';
 import { AppProvider, useApp, ONBOARDED_KEY } from './src/state';
 import { countDocs, countPages, kvGet, kvSet, Page } from './src/db';
@@ -17,6 +19,11 @@ import Welcome, { TrialSteps } from './src/screens/Welcome';
 import { maybeRequestReviewOnLaunch } from './src/reviews';
 import { Slip } from './src/ui/Paper';
 import { PRIVACY_URL } from './src/links';
+
+// The device's language (English when it is not one the app speaks) and its
+// locale for dates and numbers, once, before anything is drawn.
+const deviceLocale = getLocales()[0];
+setLocale(deviceLocale?.languageTag, deviceLocale?.languageCode);
 
 type Route = { name: 'home' } | { name: 'result'; docId: number } | { name: 'settings' };
 
@@ -83,10 +90,10 @@ function Shell() {
     try {
       if (kind === 'photos') return await pickPhotos(limit);
       const picked = await pickFiles(limit);
-      if (picked.skipped > 0 && !isPro) say(`Reading the first ${picked.sources.length}. Pro reads every page.`);
+      if (picked.skipped > 0 && !isPro) say(t().readingFirst(picked.sources.length));
       return picked.sources;
     } catch (e: any) {
-      Alert.alert('That file did not open', /password/i.test(e?.message ?? '') ? 'This PDF has a password. Open it somewhere else first, or use a screenshot.' : 'Try another one, or a photo of it.');
+      Alert.alert(t().fileDidNotOpen, /password/i.test(e?.message ?? '') ? t().pdfHasPassword : t().tryAnotherFile);
       return null;
     }
   };
@@ -116,7 +123,7 @@ function Shell() {
     setCapture(null);
     if (res.read > 0) await spendRecognitions(res.read);
     bumpData();
-    if (res.read === 0) say('Nothing to read on that one. More light, or a little closer, usually does it.');
+    if (res.read === 0) say(t().nothingToRead);
     setRoute({ name: 'result', docId: res.docId });
   };
 
