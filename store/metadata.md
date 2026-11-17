@@ -1,4 +1,4 @@
-# Image to Text, App Store metadata (1.0.0)
+# Image to Text, App Store metadata (1.0.1)
 
 Everything here is pasted into App Store Connect by Brian and Cowork. No em dashes anywhere, no brand words, no "Unlock", "Premium", "Seamless", "Effortless", "Welcome", "Let's" or exclamation marks.
 
@@ -12,12 +12,30 @@ Home screen name (app.json `name`): Image to Text
 ## Subtitle (27/30)
 Text Scanner, Copy & Export
 
-## Keywords (97/100)
-photo,picture,scan,extract,convert,notes,document,pdf,whiteboard,receipt,camera,paste,recognition
+## Keywords (99/100)
+photo,picture,scan,notes,document,pdf,transcribe,handwritten,live,camera,screenshot,reader,word,doc
 
-(Brian approved, Oct 22.) The first list also had "copy" (already in the subtitle) and "translate" (the app does not translate, and Apple can reject keywords for features an app does not have), which made it 112 characters, over Apple's 100.
+(1.0.1, Brian, Nov 17.) Replaces the 1.0.0 list (photo,picture,scan,extract,convert,notes,document,pdf,whiteboard,receipt,camera,paste,recognition, 97/100, approved Oct 22). The words that left the English list are in the Spanish (Mexico) keywords below.
 
 Rule: no word from the name or subtitle (image, to, text, handwriting, ocr, scanner, copy, export).
+
+## Spanish (Mexico) locale
+
+A second localization in App Store Connect, Spanish (Mexico). Name and subtitle are the same as English; only the keywords differ, so the two lists together cover more words.
+
+### Name (30/30)
+Image to Text: Handwriting OCR
+
+### Subtitle (27/30)
+Text Scanner, Copy & Export
+
+### Keywords (96/100)
+extract,convert,recognition,paste,whiteboard,receipt,cursive,writing,letter,book,page,lens,study
+
+No word repeats the English keywords, the name or the subtitle.
+
+### What's New (1.0.1)
+Small fixes and improvements.
 
 ## Promotional text (156/170)
 Point the camera at a page, a whiteboard or a handwritten note and get text you can copy, clean up and export. It reads on your iPhone. Nothing is uploaded.
@@ -52,8 +70,10 @@ Free: 3 scans a day, copy and share. Pro adds unlimited scans, Clean up, export 
 Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
 Privacy Policy: https://bkdigitalleads-cmyk.github.io/imagetotext/privacy.html
 
-## What's New (1.0.0)
-First version. Scan a page, a note or a whiteboard and get text you can copy, clean up and export, all on your iPhone.
+## What's New (1.0.1)
+Small fixes and improvements.
+
+1.0.0 had: First version. Scan a page, a note or a whiteboard and get text you can copy, clean up and export, all on your iPhone.
 
 ## Category
 Primary: Productivity. Secondary: Utilities.
