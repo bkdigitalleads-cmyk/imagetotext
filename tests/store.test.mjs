@@ -1,7 +1,7 @@
 // Checks for the App Store listings in store/metadata.md: the eight English
 // listings added in 1.0.2 for the US App Store (ar-SA, fr-FR, ko, pt-BR, ru,
 // vi, zh-Hans, zh-Hant) keep Apple's limits and the keyword rules, and the
-// en-US and es-MX listings stay as they were. Run with `npm test`.
+// en-US and es-MX listings match App Store Connect for 1.0.2. Run with `npm test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -86,13 +86,26 @@ test('store: every target phrase sits whole in a name or subtitle', () => {
     assert.ok(fields.some((f) => ` ${f} `.includes(` ${phrase} `)), `"${phrase}" is not whole in any name or subtitle`);
 });
 
-test('store: en-US and es-MX stay exactly as they were in 1.0.1', () => {
+test('store: en-US and es-MX match App Store Connect for 1.0.2 ("live" swapped for "page")', () => {
   assert.equal(under('## Name ('), 'Image to Text: Handwriting OCR');
   assert.equal(under('## Subtitle ('), 'Text Scanner, Copy & Export');
-  assert.equal(under('## Keywords ('), 'photo,picture,scan,notes,document,pdf,transcribe,handwritten,live,camera,screenshot,reader,word,doc');
+  assert.equal(under('## Keywords ('), 'photo,picture,scan,notes,document,pdf,transcribe,handwritten,page,camera,screenshot,reader,word,doc');
   assert.equal(under('### Name ('), 'OCR Scanner: Picture to Text');
   assert.equal(under('### Subtitle ('), 'Transcribe Handwriting & Notes');
-  assert.equal(under('### Keywords ('), 'image,document,photo,scan,handwritten,pdf,convert,reader,whiteboard,receipt,cursive,live,letter,book');
+  assert.equal(under('### Keywords ('), 'image,document,photo,scan,handwritten,pdf,convert,reader,whiteboard,receipt,cursive,page,letter,book');
+});
+
+test('store: en-US and es-MX keep Apple\'s limits and never form the Apple feature name', () => {
+  for (const [name, subtitle, keywords] of [
+    [under('## Name ('), under('## Subtitle ('), under('## Keywords (')],
+    [under('### Name ('), under('### Subtitle ('), under('### Keywords (')],
+  ]) {
+    assert.ok(name.length <= 30 && subtitle.length <= 30, name);
+    assert.ok(Buffer.byteLength(keywords, 'utf8') <= 100, keywords);
+    assert.ok(!/\s/.test(keywords), keywords);
+    const all = [...words(name), ...words(subtitle), ...keywords.split(',')];
+    for (const banned of ['live', 'lens']) assert.ok(!all.includes(banned), `${name}: "${banned}"`);
+  }
 });
 
 test('store: no em dashes in the store text', () => {

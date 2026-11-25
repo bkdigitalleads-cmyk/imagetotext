@@ -13,7 +13,9 @@ Home screen name (app.json `name`): Image to Text
 Text Scanner, Copy & Export
 
 ## Keywords (99/100)
-photo,picture,scan,notes,document,pdf,transcribe,handwritten,live,camera,screenshot,reader,word,doc
+photo,picture,scan,notes,document,pdf,transcribe,handwritten,page,camera,screenshot,reader,word,doc
+
+(1.0.2, Brian, Nov 25.) "live" replaced by "page" in App Store Connect, so the Apple feature name no longer forms with "Text" in the name. The 1.0.1 list had live in that place.
 
 (1.0.1, Brian, Nov 17.) Replaces the 1.0.0 list (photo,picture,scan,extract,convert,notes,document,pdf,whiteboard,receipt,camera,paste,recognition, 97/100, approved Oct 22). The words that left the English list are in the Spanish (Mexico) keywords below.
 
@@ -21,7 +23,7 @@ Rule: no word from the name or subtitle (image, to, text, handwriting, ocr, scan
 
 ## Spanish (Mexico) locale
 
-A second localization in App Store Connect, Spanish (Mexico), as set in App Store Connect for 1.0.1 (Brian, Nov 17). It has its own name and subtitle, in English, so the two listings together cover more words.
+A second localization in App Store Connect, Spanish (Mexico), as set in App Store Connect for 1.0.1 (Brian, Nov 17), with "live" replaced by "page" for 1.0.2 (Brian, Nov 25). It has its own name and subtitle, in English, so the two listings together cover more words.
 
 ### Name (28/30)
 OCR Scanner: Picture to Text
@@ -30,16 +32,16 @@ OCR Scanner: Picture to Text
 Transcribe Handwriting & Notes
 
 ### Keywords (100/100)
-image,document,photo,scan,handwritten,pdf,convert,reader,whiteboard,receipt,cursive,live,letter,book
+image,document,photo,scan,handwritten,pdf,convert,reader,whiteboard,receipt,cursive,page,letter,book
 
-No keyword repeats a word from this locale's name or subtitle. Seven words are also in the English keywords (document, photo, scan, handwritten, pdf, reader, live).
+No keyword repeats a word from this locale's name or subtitle. Seven words are also in the English keywords (document, photo, scan, handwritten, pdf, reader, page).
 
 ### What's New (1.0.1)
 Small fixes and improvements.
 
 ## More English listings for the US App Store (1.0.2)
 
-Eight more localizations in App Store Connect, all in English, that the US App Store also indexes. Each one is its own listing: a search phrase only forms inside one listing, so every target phrase sits whole in one listing's name or subtitle, and the keywords add words that combine with that listing's own name and subtitle. en-US and es-MX above stay exactly as they are.
+Eight more localizations in App Store Connect, all in English, that the US App Store also indexes. Each one is its own listing: a search phrase only forms inside one listing, so every target phrase sits whole in one listing's name or subtitle, and the keywords add words that combine with that listing's own name and subtitle. en-US and es-MX above keep their names and subtitles; in 1.0.2 their keyword fields only swap "live" for "page".
 
 Description, promotional text, support and privacy links: copied from en-US. What's New (1.0.2), every listing including en-US and es-MX: Small fixes and improvements.
 
